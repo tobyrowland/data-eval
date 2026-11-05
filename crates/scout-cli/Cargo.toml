@@ -1,0 +1,15 @@
+[package]
+name = "scout-cli"
+description = "Command-line driver for the DataPack Scout assessment core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "datapack-scout"
+path = "src/main.rs"
+
+[dependencies]
+scout-core = { path = "../scout-core" }
+serde_json.workspace = true
