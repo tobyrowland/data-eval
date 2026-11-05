@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DataPack Scout</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect x="2" y="2" width="60" height="60" rx="15" fill="#14283F"/>
+        <circle cx="32" cy="32" r="19" fill="none" stroke="#7FD1C6" stroke-width="2" stroke-dasharray="3 4" opacity=".7"/>
+        <circle cx="32" cy="32" r="11" fill="#187C75"/>
+        <circle cx="28.5" cy="29.5" r="4" fill="#9FE3D8"/>
+        <circle cx="36" cy="35" r="2.6" fill="#F6F8FB"/>
+        <circle cx="47" cy="20" r="3.4" fill="#E8AA40"/>
+      </svg>
+      <span class="brand-name">DataPack Scout</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill" title="Everything runs on this computer">
+        <span class="status-dot"></span>Local assessment · Nothing is uploaded
+      </span>
+      <button class="link-btn" id="privacy-open">How privacy works</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Screen: add data -->
+    <section class="screen" id="screen-add" data-active>
+      <div class="add-layout">
+        <div class="hero">
+          <p class="eyebrow">Step 1 of 3</p>
+          <h1>Understand your company data, privately.</h1>
+          <p class="lede">Add your exports to see what you have, how it is connected and what may interest AI-data buyers.</p>
+          <p class="reassure"><svg class="i" viewBox="0 0 24 24"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>Assessment happens on this computer. No data is sent to us or to an AI service.</p>
+        </div>
+
+        <div class="dropzone" id="dropzone" tabindex="0">
+          <div class="drop-art" aria-hidden="true">
+            <span class="drop-file f1"></span><span class="drop-file f2"></span><span class="drop-file f3"></span>
+            <svg viewBox="0 0 24 24" class="drop-arrow"><path d="M12 4v12m0 0-5-5m5 5 5-5M5 20h14"/></svg>
+          </div>
+          <h2 class="drop-title">Drop your exports here</h2>
+          <p class="drop-sub">Slack, email, documents, spreadsheets, code and other files can be added together. Keep exports zipped if that is easiest.</p>
+          <div class="drop-actions">
+            <button class="btn secondary" id="pick-files">Choose files</button>
+            <button class="btn secondary" id="pick-folder">Choose a folder</button>
+          </div>
+          <p class="drop-note">We read the files you select. Assessment stays local.</p>
+        </div>
+
+        <div class="selection" id="selection" hidden>
+          <div class="selection-head">
+            <h3>Ready to assess</h3>
+            <span class="muted" id="selection-total"></span>
+          </div>
+          <ul class="selection-list" id="selection-list"></ul>
+          <div class="selection-foot">
+            <button class="btn ghost" id="clear-all">Clear all</button>
+            <button class="btn primary big" id="start">Assess my data <span aria-hidden="true">→</span></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Screen: assessing -->
+    <section class="screen" id="screen-assess">
+      <div class="assess-layout">
+        <div class="orbit" aria-hidden="true">
+          <div class="orbit-ring r1"></div><div class="orbit-ring r2"></div><div class="orbit-ring r3"></div>
+          <div class="orbit-core"></div>
+          <span class="sat s1"></span><span class="sat s2"></span><span class="sat s3"></span>
+        </div>
+        <p class="eyebrow">Step 2 of 3</p>
+        <h1 class="assess-title">Assessing your data</h1>
+        <p class="lede" id="assess-current">Starting…</p>
+        <div class="counters">
+          <div><strong id="c-files">0</strong><span>files inventoried</span></div>
+          <div><strong id="c-bytes">0 B</strong><span>content examined</span></div>
+          <div><strong id="c-records">0</strong><span>records counted</span></div>
+          <div><strong id="c-time">0:00</strong><span>elapsed</span></div>
+        </div>
+        <ol class="stages" id="stages">
+          <li data-stage="0">Finding files and exports</li>
+          <li data-stage="1">Identifying sources and formats</li>
+          <li data-stage="2">Counting records and history</li>
+          <li data-stage="3">Checking duplicates, links and gaps</li>
+          <li data-stage="4">Building your data map</li>
+        </ol>
+        <p class="reassure center"><span class="status-dot"></span>Working on your computer. Nothing is being uploaded.</p>
+        <button class="btn ghost" id="stop">Stop</button>
+      </div>
+    </section>
+
+    <!-- Screen: data map -->
+    <section class="screen" id="screen-map">
+      <div class="map-page" id="map-page"></div>
+    </section>
+  </main>
+
+  <!-- Privacy panel -->
+  <aside class="panel" id="privacy-panel" aria-hidden="true">
+    <div class="panel-inner">
+      <button class="panel-close" id="privacy-close" aria-label="Close">×</button>
+      <p class="eyebrow">Privacy</p>
+      <h2>How privacy works</h2>
+      <dl class="facts">
+        <dt>What is read</dt>
+        <dd>Only the files, folders and archives you add. Online-only cloud placeholders are skipped, so no cloud download is ever triggered.</dd>
+        <dt>Where it happens</dt>
+        <dd>On this computer. Archives are opened in memory and are never unpacked to disk. Links inside your files are counted, never opened.</dd>
+        <dt>What is sent</dt>
+        <dd>Nothing. This app has no network features: no analytics, no crash uploads, no update checks, and no AI services.</dd>
+        <dt>What is saved</dt>
+        <dd>Only what you choose to save: your data map, in Documents › DataPack Scout. It contains counts and coverage, not your messages, documents or file paths.</dd>
+        <dt>Still to come</dt>
+        <dd>Operating-system network isolation with a verified status indicator, and the optional encrypted assessment you can choose to email for a commercial review.</dd>
+      </dl>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+  <div class="toast" id="toast" role="status"></div>
+
+  <div class="drag-veil" id="drag-veil" aria-hidden="true">
+    <div class="drag-veil-card">
+      <svg viewBox="0 0 24 24" class="drop-arrow"><path d="M12 4v12m0 0-5-5m5 5 5-5M5 20h14"/></svg>
+      <strong>Drop to add</strong>
+      <span>Files, folders and ZIP exports</span>
+    </div>
+  </div>
+
+  <div class="tooltip" id="tooltip" role="tooltip"></div>
+  <script src="map.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

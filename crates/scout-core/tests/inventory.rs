@@ -135,6 +135,7 @@ fn expansion_budget_still_inventories_the_rest() {
             ..Limits::default()
         },
         exclude: vec![],
+        cancel: None,
     };
     let inv = scan(&[d.join("in")], opts);
     assert_eq!(inv.items.len(), 5, "every file stays in the inventory");
@@ -159,6 +160,7 @@ fn logical_file_limit_stops_enumeration_and_says_so() {
             ..Limits::default()
         },
         exclude: vec![],
+        cancel: None,
     };
     let inv = scan(&[d.join("in")], opts);
     assert_eq!(inv.items.len(), 4);
@@ -224,4 +226,34 @@ fn symlinks_are_not_followed() {
     let l = find(&inv, "link.txt");
     assert_eq!(l.reason, Some(Reason::SymlinkNotFollowed));
     assert_eq!(l.expanded_bytes, 0);
+}
+
+#[test]
+fn stop_keeps_work_done_and_says_it_is_incomplete() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let d = tempdir("cancel");
+    for i in 0..20 {
+        write(&d, &format!("in/{i:02}.txt"), b"hello\n");
+    }
+    let flag = Arc::new(AtomicBool::new(false));
+    let opts = ScanOptions {
+        cancel: Some(flag.clone()),
+        ..ScanOptions::default()
+    };
+    let mut seen = 0;
+    let inv = scout_core::scan_with_progress(&[d.join("in")], opts, &mut |p| {
+        seen = p.files_seen;
+        if p.files_seen == 5 {
+            flag.store(true, Ordering::Relaxed);
+        }
+    });
+    assert!(inv.cancelled);
+    assert!(
+        inv.items.len() < 20 && inv.items.len() >= 4,
+        "{}",
+        inv.items.len()
+    );
+    assert!(seen >= 5);
+    assert!(inv.limits_reached.contains(&Reason::StoppedByUser));
 }

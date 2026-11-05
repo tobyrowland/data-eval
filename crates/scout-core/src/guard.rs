@@ -8,6 +8,8 @@ use std::cell::Cell;
 use std::fmt;
 use std::io::{self, Read};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// A limit was reached while reading. Carried inside `io::Error`.
 #[derive(Debug, Clone)]
@@ -85,6 +87,7 @@ impl<R: Read> Read for RatioGuard<R> {
 pub struct Budget {
     used: Rc<Cell<u64>>,
     max: u64,
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Budget {
@@ -92,7 +95,17 @@ impl Budget {
         Budget {
             used: Rc::new(Cell::new(0)),
             max,
+            cancel: None,
         }
+    }
+    pub fn with_cancel(mut self, cancel: Option<Arc<AtomicBool>>) -> Self {
+        self.cancel = cancel;
+        self
+    }
+    pub fn cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|c| c.load(Ordering::Relaxed))
     }
     pub fn used(&self) -> u64 {
         self.used.get()
@@ -145,6 +158,10 @@ impl<'a> MeteredReader<'a> {
 
 impl Read for MeteredReader<'_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        // Checked per read so Stop is prompt even inside a very large file.
+        if self.budget.cancelled() {
+            return Err(limit_error(Reason::StoppedByUser));
+        }
         let n = self.inner.read(buf)?;
         self.read += n as u64;
         self.budget.used.set(self.budget.used.get() + n as u64);

@@ -27,6 +27,11 @@ pub struct DataMap {
     pub collections: Vec<CollectionSummary>,
     pub limits_reached: Vec<Explained>,
     pub preparation_priorities: Vec<String>,
+    /// Links from collections to material they refer to, resolved or not.
+    pub relationships: Vec<Relationship>,
+    /// Content-derived activity per calendar month (YYYY-MM), all collections.
+    pub activity: BTreeMap<String, u64>,
+    pub stopped_by_user: bool,
     pub privacy: Privacy,
 }
 
@@ -83,7 +88,31 @@ pub struct CollectionSummary {
     pub expanded_bytes: u64,
     pub date_coverage: Option<DateCoverage>,
     pub explanation: String,
+    pub formats: Vec<FormatSlice>,
     pub slack: Vec<SlackInventory>,
+}
+
+/// One format family inside a collection, for the visual map.
+#[derive(Debug, Serialize)]
+pub struct FormatSlice {
+    pub format: &'static str,
+    pub category: &'static str,
+    pub files: u64,
+    pub bytes: u64,
+    /// Files whose content was examined (assessed or partly assessed).
+    pub examined: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Relationship {
+    /// Collection label the references come from.
+    pub from: String,
+    /// What is referred to, in plain words.
+    pub to: &'static str,
+    pub count: u64,
+    /// Whether the referenced originals are present in the selection.
+    pub available_locally: bool,
+    pub explanation: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -149,6 +178,8 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
     let mut col_files = vec![0u64; ncol];
     let mut col_records = vec![0u64; ncol];
     let mut col_bytes = vec![0u64; ncol];
+    let mut col_formats: Vec<BTreeMap<Format, (u64, u64, u64)>> =
+        (0..ncol).map(|_| BTreeMap::new()).collect();
 
     for it in &inv.items {
         if it.parent.is_none() {
@@ -169,6 +200,10 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         col_files[c] += 1;
         col_records[c] += it.records.unwrap_or(0);
         col_bytes[c] += it.expanded_bytes;
+        let f = col_formats[c].entry(it.format).or_default();
+        f.0 += 1;
+        f.1 += it.expanded_bytes;
+        f.2 += u64::from(it.status.content_examined());
         if let Some(r) = &it.reason {
             *reasons.entry(r.clone()).or_default() += 1;
         }
@@ -240,6 +275,16 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
                 basis: "message timestamps inside the export",
             }),
             explanation,
+            formats: col_formats[i]
+                .iter()
+                .map(|(f, (files, bytes, examined))| FormatSlice {
+                    format: f.label(),
+                    category: f.category(),
+                    files: *files,
+                    bytes: *bytes,
+                    examined: *examined,
+                })
+                .collect(),
             slack,
         });
     }
@@ -296,7 +341,11 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         ));
     }
     if !inv.limits_reached.is_empty() {
-        summary.push("A capacity or safety limit was reached, so this is not a full assessment of everything selected.".into());
+        summary.push(if inv.cancelled {
+            "You stopped the assessment, so this map covers only what was read before then.".into()
+        } else {
+            "A capacity or safety limit was reached, so this is not a full assessment of everything selected.".into()
+        });
     }
 
     // ---- preparation priorities, ranked by how much they change coverage
@@ -354,6 +403,16 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
     }
     prep.sort_by_key(|p| std::cmp::Reverse(p.0));
 
+    let relationships = relationships(&collections);
+    let activity: BTreeMap<String, u64> = collections
+        .iter()
+        .flat_map(|c| c.slack.iter())
+        .flat_map(|s| s.monthly_activity.iter())
+        .fold(BTreeMap::new(), |mut acc, (k, v)| {
+            *acc.entry(k.clone()).or_default() += v;
+            acc
+        });
+
     DataMap {
         app: APP_NAME,
         app_version: APP_VERSION,
@@ -378,11 +437,63 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
             .map(|r| Explained { reason: r.clone(), explanation: r.explain() })
             .collect(),
         preparation_priorities: prep.into_iter().map(|p| p.1).collect(),
+        relationships,
+        activity,
+        stopped_by_user: inv.cancelled,
         privacy: Privacy {
             statement: "Everything was assessed on this computer. No files or contents were sent to us or to an AI service.",
-            network: "Local assessment · Network access disabled",
+            network: "Local assessment · Nothing is uploaded",
         },
     }
+}
+
+fn relationships(collections: &[CollectionSummary]) -> Vec<Relationship> {
+    let mut out = Vec::new();
+    for c in collections {
+        for s in &c.slack {
+            if s.referenced_image_files > 0 {
+                out.push(Relationship {
+                    from: c.label.clone(),
+                    to: "Images shared in conversations",
+                    count: s.referenced_image_files,
+                    available_locally: false,
+                    explanation: format!(
+                        "{} referred to in messages; the image files are not in the export.",
+                        plural(s.referenced_image_files, "image is", "images are")
+                    ),
+                });
+            }
+            let other_files = s
+                .distinct_file_references
+                .saturating_sub(s.referenced_image_files);
+            if other_files > 0 {
+                out.push(Relationship {
+                    from: c.label.clone(),
+                    to: "Documents shared in conversations",
+                    count: other_files,
+                    available_locally: false,
+                    explanation: format!(
+                        "{} referred to in messages; the originals are not in the export.",
+                        plural(other_files, "other file is", "other files are")
+                    ),
+                });
+            }
+            let prs = s.distinct_bitbucket_pr_references + s.distinct_github_pr_references;
+            if prs > 0 {
+                out.push(Relationship {
+                    from: c.label.clone(),
+                    to: "Code reviews and repositories",
+                    count: prs,
+                    available_locally: false,
+                    explanation: format!(
+                        "{} linked from conversations. Adding the repositories would connect discussion to code.",
+                        plural(prs, "pull request is", "pull requests are")
+                    ),
+                });
+            }
+        }
+    }
+    out
 }
 
 /// Plain-text rendering of the data map for the terminal.

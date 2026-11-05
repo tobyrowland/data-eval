@@ -93,6 +93,24 @@ impl Format {
         )
     }
 
+    /// Broad family used to group formats on the data map.
+    pub fn category(self) -> &'static str {
+        match self {
+            Format::Csv | Format::Tsv => "Tables",
+            Format::Json | Format::Jsonl | Format::Xml | Format::Sqlite => "Structured data",
+            Format::OfficeDocument
+            | Format::OpenDocument
+            | Format::Pdf
+            | Format::Html
+            | Format::Markdown
+            | Format::PlainText => "Documents",
+            Format::Mbox | Format::Eml => "Email",
+            Format::Image | Format::Audio | Format::Video => "Media",
+            Format::Zip | Format::Tar | Format::Gzip | Format::SevenZip | Format::Rar => "Archives",
+            Format::Executable | Format::Pst | Format::Unknown => "Other",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Format::Zip => "ZIP archive",
@@ -169,6 +187,7 @@ pub enum Reason {
     UnsafeMemberPath,
     SymlinkNotFollowed,
     ChangedDuringScan,
+    StoppedByUser,
     ReadError,
 }
 
@@ -191,6 +210,7 @@ impl Reason {
             Reason::UnsafeMemberPath => "archive member path escapes its container",
             Reason::SymlinkNotFollowed => "symbolic link not followed",
             Reason::ChangedDuringScan => "changed while being read; run the assessment again",
+            Reason::StoppedByUser => "you stopped the assessment before this was read",
             Reason::ReadError => "read error",
         }
     }
