@@ -191,6 +191,47 @@ impl SlackRecogniser {
             .map(ExportState::inventory)
             .collect()
     }
+
+    /// Slack file IDs referenced by recognised exports, split into images and
+    /// other files. Local only: used to match attachments added later.
+    pub fn referenced_files(&self) -> (HashSet<String>, HashSet<String>) {
+        let mut images = HashSet::new();
+        let mut others = HashSet::new();
+        for s in self
+            .exports
+            .values()
+            .filter(|s| (s.saw_channels_json || s.saw_users_json) && s.message_records > 0)
+        {
+            for id in &s.file_ids {
+                if s.image_ids.contains(id) {
+                    images.insert(id.clone());
+                } else {
+                    others.insert(id.clone());
+                }
+            }
+        }
+        (images, others)
+    }
+}
+
+/// Whether a path segment looks like a Slack file ID (for example `F04ABCD1234`).
+pub fn is_slack_file_id(s: &str) -> bool {
+    (9..=13).contains(&s.len())
+        && s.starts_with('F')
+        && s[1..]
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+}
+
+/// Recognises the attachment layout written by the DataPack Scout Attachment
+/// Downloader (`…/attachments/<FILE_ID>/<name>`), returning the file ID.
+pub fn attachment_file_id(path: &str) -> Option<&str> {
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    if segs.len() < 3 {
+        return None;
+    }
+    let (parent, id) = (segs[segs.len() - 3], segs[segs.len() - 2]);
+    (matches!(parent, "attachments" | "files") && is_slack_file_id(id)).then_some(id)
 }
 
 impl ExportState {

@@ -102,6 +102,11 @@ impl Budget {
         self.cancel = cancel;
         self
     }
+    /// Starts the budget part-used, when extending an earlier assessment.
+    pub fn with_used(self, used: u64) -> Self {
+        self.used.set(used);
+        self
+    }
     pub fn cancelled(&self) -> bool {
         self.cancel
             .as_ref()

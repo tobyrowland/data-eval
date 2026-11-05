@@ -15,7 +15,7 @@ pub mod scan;
 
 pub use limits::Limits;
 pub use report::{build_data_map, DataMap};
-pub use scan::{scan, scan_with_progress, Inventory, Progress, ScanOptions};
+pub use scan::{extend_scan, scan, scan_with_progress, Inventory, Progress, ScanOptions};
 
 pub const APP_NAME: &str = "DataPack Scout";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");

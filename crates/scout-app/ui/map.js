@@ -46,8 +46,12 @@
     for (const f of c.formats || []) by[f.category] = (by[f.category] || 0) + f.files;
     return Object.entries(by).sort((a, b) => b[1] - a[1])[0]?.[0] || "Other";
   }
+  // Collections where attachments referenced by an export were found, with
+  // how many matched. Set per render.
+  let attachTargets = new Map();
   function kindInfo(c) {
     if ((c.slack || []).length) return { badge: "#", color: "#6D5BD0", kind: "Slack workspace export" };
+    if (attachTargets.has(c.label)) return { badge: "↓", color: "#22A094", kind: "Slack attachments", matched: attachTargets.get(c.label) };
     const cat = dominantCategory(c);
     if (cat === "Email") return { badge: "@", color: CAT.Email, kind: "Email archive" };
     if ((c.formats || []).length === 1 && c.logical_files === 1) {
@@ -206,7 +210,9 @@
     const [bx, by, bw, bh] = L.box;
     const tips = [];
     const tip = (html) => { tips.push(html); return `data-tip="${tips.length - 1}"`; };
-    let s = `<svg class="map-svg" viewBox="${bx.toFixed(0)} ${by.toFixed(0)} ${bw.toFixed(0)} ${bh.toFixed(0)}" role="img" aria-label="Map of your data collections">
+    // Never draw larger than 1.25x natural size, so a map with one or two
+    // collections stays legible instead of filling the card with giant type.
+    let s = `<svg class="map-svg" style="max-width:${Math.round(bw * 1.25)}px;margin:0 auto" viewBox="${bx.toFixed(0)} ${by.toFixed(0)} ${bw.toFixed(0)} ${bh.toFixed(0)}" role="img" aria-label="Map of your data collections">
       <defs>
         <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
           <rect width="6" height="6" fill="#fff"/><rect width="2.2" height="6" fill="#CAD4E0"/>
@@ -228,7 +234,15 @@
     L.ghosts.forEach((g, i) => {
       const e = edgePath(g.parent, g, 18);
       const delay = 1100 + i * 140;
-      s += `<path d="${e.d}" stroke="#E2A23B" stroke-width="2" fill="none" class="flow fade" style="animation-delay:${delay}ms, ${delay}ms"/>`;
+      const done = g.rel.resolved >= g.rel.count;
+      s += `<path d="${e.d}" stroke="${done ? "#22A094" : "#E2A23B"}" stroke-width="2" fill="none" class="${done ? "" : "flow "}fade" style="animation-delay:${delay}ms, ${delay}ms"/>`;
+      // where the originals were found: a solid teal link to that collection
+      (g.rel.found_in || []).forEach((label) => {
+        const target = L.cols.find((c) => c.c.label === label);
+        if (!target) return;
+        const f = edgePath(g, target, -26);
+        s += `<path d="${f.d}" stroke="#22A094" stroke-width="2.5" fill="none" class="draw" style="animation-delay:${delay + 300}ms"/>`;
+      });
     });
 
     // collections
@@ -256,7 +270,7 @@
         s += `</g>`;
       });
       s += `<text class="halo-text" y="${(n.r + 22).toFixed(1)}" text-anchor="middle" font-size="14.5" font-weight="650" fill="#14283F">${esc(trunc(c.label, 30))}</text>
-        <text class="halo-text" y="${(n.r + 40).toFixed(1)}" text-anchor="middle" font-size="12" fill="#6B7C93">${esc(n.info.kind)} · ${num(c.logical_files)} ${c.logical_files === 1 ? "file" : "files"} · ${pct}% examined</text>
+        <text class="halo-text" y="${(n.r + 40).toFixed(1)}" text-anchor="middle" font-size="12" fill="#6B7C93">${esc(n.info.kind)} · ${num(c.logical_files)} ${c.logical_files === 1 ? "file" : "files"} · ${n.info.matched != null ? `${num(n.info.matched)} matched to conversations` : `${pct}% examined`}</text>
       </g></g>`;
     });
 
@@ -264,12 +278,27 @@
     L.ghosts.forEach((g, i) => {
       const delay = 1200 + i * 140;
       const r = g.rel;
-      const t = tip(`<b>${esc(r.to)}</b>${esc(r.explanation)}<br><span>Not in your selection. Adding these would strengthen the package.</span>`);
+      const missing = Math.max(0, r.count - (r.resolved || 0));
+      const frac = r.count ? (r.resolved || 0) / r.count : 0;
+      const done = missing === 0;
+      const t = tip(`<b>${esc(r.to)}</b>${esc(r.explanation)}<br><span>${done ? "All found in your selection." : "See “Make your data more complete” below for how to get these."}</span>`);
       const lines = wrap(r.to, 18);
-      s += `<g transform="translate(${g.x.toFixed(1)},${g.y.toFixed(1)})"><g class="grow" style="animation-delay:${delay}ms" ${t}>
-        <circle r="${g.r.toFixed(1)}" fill="#FDF6EA" stroke="#E2A23B" stroke-width="2" stroke-dasharray="5 4"/>
-        <text y="${(-2).toFixed(1)}" text-anchor="middle" font-size="${clamp(g.r / 2.3, 11, 17).toFixed(1)}" font-weight="700" fill="#8A5A0B">${num(r.count)}</text>
-        <text y="${(clamp(g.r / 2.3, 11, 17) * 0.85).toFixed(1)}" text-anchor="middle" font-size="10" fill="#A56E14">missing</text>`;
+      const fs = clamp(g.r / 2.3, 11, 17);
+      const circ = 2 * Math.PI * g.r;
+      s += `<g transform="translate(${g.x.toFixed(1)},${g.y.toFixed(1)})"><g class="grow" style="animation-delay:${delay}ms" ${t}>`;
+      if (done) {
+        s += `<circle r="${g.r.toFixed(1)}" fill="#E3F3F1" stroke="#22A094" stroke-width="2.5"/>
+          <path d="M${-fs * 0.45},${-fs * 0.35} l${fs * 0.3},${fs * 0.3} l${fs * 0.6},${-fs * 0.6}" stroke="#187C75" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <text y="${(fs * 0.95).toFixed(1)}" text-anchor="middle" font-size="10.5" font-weight="650" fill="#187C75">${num(r.count)} added</text>`;
+      } else {
+        s += `<circle r="${g.r.toFixed(1)}" fill="#FDF6EA" stroke="#E2A23B" stroke-width="2" stroke-dasharray="5 4"/>`;
+        if (frac > 0) {
+          s += `<circle r="${g.r.toFixed(1)}" fill="none" stroke="#22A094" stroke-width="4" stroke-linecap="round" transform="rotate(-90)"
+            stroke-dasharray="${(circ * frac).toFixed(1)} ${circ.toFixed(1)}"/>`;
+        }
+        s += `<text y="-2" text-anchor="middle" font-size="${fs.toFixed(1)}" font-weight="700" fill="#8A5A0B">${num(missing)}</text>
+          <text y="${(fs * 0.85).toFixed(1)}" text-anchor="middle" font-size="10" fill="#A56E14">${frac > 0 ? "still missing" : "missing"}</text>`;
+      }
       // put the caption on the side away from the parent, clear of the link
       const above = g.y < g.parent.y - g.parent.r * 0.3;
       lines.forEach((ln, k) => {
@@ -348,7 +377,12 @@
     return { value, note: `${first.slice(0, 7)} to ${last.slice(0, 7)}` };
   }
 
-  function render(root, map, handlers) {
+  function render(root, map, handlers, extra) {
+    extra = extra || {};
+    attachTargets = new Map();
+    for (const r of map.relationships || []) {
+      for (const label of r.found_in || []) attachTargets.set(label, (attachTargets.get(label) || 0) + (r.resolved || 0));
+    }
     const t = map.totals, cov = map.coverage;
     const pct = cov.content_examined_percent ?? 0;
     const sp = span(map);
@@ -376,7 +410,9 @@
       const denom = Math.max(1, c.logical_files - (c.by_status.excluded || 0));
       const stats = (c.slack || []).length
         ? [["messages", s.message_records], ["threads", s.explicit_threads], ["posting accounts", s.accounts_posting_participant_content], ["channels", s.channels_in_metadata]]
-        : [["files", c.logical_files], ["records", c.structured_records], ["size", null, bytes(c.expanded_bytes)], ["examined", null, Math.round((examined * 100) / denom) + "%"]];
+        : info.matched != null
+          ? [["files", c.logical_files], ["matched to messages", info.matched], ["size", null, bytes(c.expanded_bytes)], ["examined", null, Math.round((examined * 100) / denom) + "%"]]
+          : [["files", c.logical_files], ["records", c.structured_records], ["size", null, bytes(c.expanded_bytes)], ["examined", null, Math.round((examined * 100) / denom) + "%"]];
       const bar = STATUS.map(([k, , color]) => {
         const v = c.by_status[k] || 0;
         return v ? `<span style="width:${(v * 100) / Math.max(1, c.logical_files)}%;background:${color}"></span>` : "";
@@ -400,10 +436,13 @@
           <div class="map-id">Assessment ${esc(map.assessment_id)} · ${esc(map.app)} ${esc(map.app_version)} · rules ${esc(map.ruleset_version)}</div>
         </div>
         <div class="actions">
-          <button class="btn secondary" data-act="restart">Start again</button>
+          <button class="btn ghost" data-act="restart">Start again</button>
+          <button class="btn secondary" data-act="adddata"><span aria-hidden="true">＋</span> Add data</button>
           <button class="btn primary" data-act="save">Save my data map</button>
         </div>
       </div>
+      ${extra.banner || ""}
+      <div class="add-hint reveal" style="animation-delay:60ms"><span class="status-dot"></span>Drop more files or folders anywhere on this page to add them to your map. Only the new material is read.</div>
 
       <div class="card summary-card reveal" style="animation-delay:80ms">
         <div style="position:relative;z-index:1">
@@ -430,6 +469,7 @@
         <div id="map-svg-host">${M.svg}</div>
         <div class="legend">${legend}</div>
       </div>
+      ${completeBlock()}
 
       <div class="grid-2">
         <div class="card panel-card reveal" style="animation-delay:600ms">
@@ -451,6 +491,32 @@
         <ul class="coverage-list">${STATUS.map(([k, l, c]) => `<li class="${cov.by_status[k] ? "" : "zero"}"><i class="swatch" style="background:${c}"></i>${l}<b>${num(cov.by_status[k] || 0)}</b></li>`).join("")}</ul>
         ${reasons.length ? `<div class="reasons">${reasons.map((r) => `<div><b>${num(r.files)}</b><span>${esc(r.explanation)}</span></div>`).join("")}</div>` : ""}`;
     }
+    function completeBlock() {
+      const rels = map.relationships || [];
+      if (!rels.length) return "";
+      const open = rels.filter((r) => (r.resolved || 0) < r.count).length;
+      const rows = rels.map((r) => {
+        const missing = Math.max(0, r.count - (r.resolved || 0));
+        const pctDone = r.count ? Math.round(((r.resolved || 0) * 100) / r.count) : 0;
+        const status = missing === 0
+          ? `<span class="pill ok">All ${num(r.count)} added</span>`
+          : r.resolved
+            ? `<span class="pill part">${num(r.resolved)} of ${num(r.count)} added</span>`
+            : `<span class="pill miss">${num(r.count)} missing</span>`;
+        return `<div class="gap-row">
+          <div class="gap-meter" style="--p:${pctDone}"><span>${pctDone}%</span></div>
+          <div class="gap-text"><b>${esc(r.to)}</b><span>${esc(r.explanation)}</span></div>
+          ${status}
+          ${missing ? `<button class="btn secondary small" data-guide="${esc(r.kind)}">How to get these</button>` : `<span></span>`}
+        </div>`;
+      }).join("");
+      return `<div class="card complete-card reveal" style="animation-delay:500ms">
+        <div class="card-head"><div><h2>Make your data more complete</h2><p>${open ? "Your data refers to material that is not in your selection yet. Adding it makes conversations easier to follow and more valuable." : "Everything your data refers to is in your selection. Nice work."}</p></div>
+          <button class="btn secondary small" data-act="adddata"><span aria-hidden="true">＋</span> Add data</button></div>
+        ${rows}
+      </div>`;
+    }
+
     function stepsBlock(inline) {
       const steps = map.preparation_priorities || [];
       if (!steps.length) return inline ? `<div class="card-head"><div><h2>Useful next steps</h2><p>Nothing obvious to add. This looks complete.</p></div></div>` : "";
@@ -486,6 +552,8 @@
     });
     root.querySelector('[data-act="save"]').onclick = handlers.onSave;
     root.querySelector('[data-act="restart"]').onclick = handlers.onRestart;
+    root.querySelectorAll('[data-act="adddata"]').forEach((b) => (b.onclick = () => handlers.onAddData(b)));
+    root.querySelectorAll("[data-guide]").forEach((b) => (b.onclick = () => handlers.onGuide(b.dataset.guide)));
   }
 
   function countUp(el, target, fmt) {

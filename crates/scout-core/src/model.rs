@@ -223,6 +223,9 @@ pub struct Collection {
     /// Owner-facing label (the selection's file name). Local only.
     pub label: String,
     pub source_kind: SourceKind,
+    /// The selected path on this computer. Local only; never serialised.
+    #[serde(skip)]
+    pub source: std::path::PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

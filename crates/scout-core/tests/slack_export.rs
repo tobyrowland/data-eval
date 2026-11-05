@@ -155,3 +155,140 @@ fn data_map_has_relationships_formats_and_activity() {
     assert_eq!(json[0].files, json[0].examined);
     assert!(!map.stopped_by_user);
 }
+
+#[test]
+fn downloaded_attachments_are_matched_back_to_references() {
+    let d = tempdir("slack-attach");
+    let day = json!([
+        {"ts": "1609459200.000100", "user": "U1", "text": "a",
+         "files": [{"id": "F04AAAAAAA1", "mimetype": "image/png", "url_private_download": "https://files.slack.com/a"},
+                   {"id": "F04AAAAAAA2", "mimetype": "image/jpeg", "url_private_download": "https://files.slack.com/b"},
+                   {"id": "F04BBBBBBB1", "mimetype": "application/pdf", "url_private_download": "https://files.slack.com/c"}]}
+    ]);
+    let z = zip_bytes(&[
+        (
+            "channels.json",
+            json!([{"name": "eng"}]).to_string().as_bytes(),
+        ),
+        ("users.json", json!([{"id": "U1"}]).to_string().as_bytes()),
+        ("eng/2021-01-01.json", day.to_string().as_bytes()),
+    ]);
+    write(&d, "export.zip", &z);
+    write(
+        &d,
+        "Export attachments/attachments/F04AAAAAAA1/diagram.png",
+        b"\x89PNG\r\n\x1a\nxx",
+    );
+    write(
+        &d,
+        "Export attachments/attachments/F04BBBBBBB1/spec.pdf",
+        b"%PDF-1.7\n",
+    );
+    write(
+        &d,
+        "Export attachments/attachments/F9NOTREFD99/other.txt",
+        b"unrelated\n",
+    );
+
+    let inv = scan(
+        &[d.join("export.zip"), d.join("Export attachments")],
+        ScanOptions::default(),
+    );
+    let map = build_data_map(&inv);
+    let img = map
+        .relationships
+        .iter()
+        .find(|r| r.kind == "slack_images")
+        .unwrap();
+    assert_eq!(
+        (img.count, img.resolved, img.available_locally),
+        (2, 1, false)
+    );
+    assert_eq!(img.found_in, vec!["Export attachments".to_string()]);
+    let doc = map
+        .relationships
+        .iter()
+        .find(|r| r.kind == "slack_files")
+        .unwrap();
+    assert_eq!(
+        (doc.count, doc.resolved, doc.available_locally),
+        (1, 1, true)
+    );
+    assert!(
+        map.summary
+            .iter()
+            .any(|s| s.contains("2 are included in your selection and 1 still missing")),
+        "{:?}",
+        map.summary
+    );
+    assert!(map
+        .preparation_priorities
+        .iter()
+        .any(|p| p.starts_with("Add the original attachments: 1 image")));
+}
+
+#[test]
+fn adding_data_later_matches_adding_it_at_once() {
+    let d = tempdir("slack-extend");
+    let day = json!([{"ts": "1609459200.000100", "user": "U1", "text": "a",
+        "files": [{"id": "F04AAAAAAA1", "mimetype": "image/png", "url_private_download": "https://files.slack.com/a"},
+                  {"id": "F04AAAAAAA2", "mimetype": "image/png", "url_private_download": "https://files.slack.com/b"}]}]);
+    let z = zip_bytes(&[
+        (
+            "channels.json",
+            json!([{"name": "eng"}]).to_string().as_bytes(),
+        ),
+        ("users.json", b"[]"),
+        ("eng/2021-01-01.json", day.to_string().as_bytes()),
+    ]);
+    write(&d, "export.zip", &z);
+    write(
+        &d,
+        "export attachments/attachments/F04AAAAAAA1/a.png",
+        b"\x89PNG\r\n\x1a\nx",
+    );
+    let export = d.join("export.zip");
+    let attach = d.join("export attachments");
+
+    let first = scan(std::slice::from_ref(&export), ScanOptions::default());
+    let before = build_data_map(&first);
+    let img = |m: &scout_core::DataMap| {
+        let r = m
+            .relationships
+            .iter()
+            .find(|r| r.kind == "slack_images")
+            .unwrap();
+        (r.count, r.resolved)
+    };
+    assert_eq!(img(&before), (2, 0));
+
+    let mut seen = 0;
+    let extended = scout_core::extend_scan(
+        Some(first),
+        &[export.clone(), attach.clone()],
+        ScanOptions::default(),
+        &mut |p| seen = p.files_seen,
+    );
+    assert_eq!(
+        extended.collections.len(),
+        2,
+        "re-adding the export is ignored"
+    );
+    let after = build_data_map(&extended);
+    assert_eq!(img(&after), (2, 1));
+    assert_eq!(
+        after.assessment_id, before.assessment_id,
+        "the assessment keeps its ID"
+    );
+
+    let at_once = build_data_map(&scan(&[export, attach], ScanOptions::default()));
+    assert_eq!(after.totals.logical_files, at_once.totals.logical_files);
+    assert_eq!(
+        after.totals.structured_records,
+        at_once.totals.structured_records
+    );
+    assert_eq!(after.totals.expanded_bytes, at_once.totals.expanded_bytes);
+    assert_eq!(img(&after), img(&at_once));
+    assert_eq!(after.summary, at_once.summary);
+    assert!(seen > 0);
+}
