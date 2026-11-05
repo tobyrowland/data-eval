@@ -10,7 +10,17 @@ and a **command-line driver** (`crates/scout-cli`) for the first delivery
 milestone, *trustworthy local inventory*. The desktop shell, owner PDF and
 encrypted private dossier come in later milestones (see below).
 
-## Try it
+## Download
+
+Preview builds for Windows, macOS and Linux are on the
+[Releases page](https://github.com/tobyrowland/data-eval/releases). Unzip the
+file and double-click `datapack-scout`. `QUICKSTART.txt` inside explains the
+first-run security prompts, because the preview is not code-signed yet.
+
+The `release` workflow builds and publishes them on every push to `main` or a
+`v*` tag.
+
+## Try it from source
 
 ```bash
 cargo run --release --bin datapack-scout -- scan ~/Downloads/slack-export.zip ~/Exports/Drive --json data-map.json
