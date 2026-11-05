@@ -54,6 +54,8 @@ pub struct Inventory {
     pub expanded_bytes_read: u64,
     pub limits: Limits,
     pub cancelled: bool,
+    /// Slack attachments found on disk, by Slack file ID, with item IDs.
+    pub attachments: std::collections::BTreeMap<String, Vec<u64>>,
 }
 
 struct Ctx {
@@ -74,6 +76,7 @@ struct Scanner<'p> {
     budget: Budget,
     records_total: u64,
     limits_reached: BTreeSet<Reason>,
+    attachments: std::collections::BTreeMap<String, Vec<u64>>,
 }
 
 /// Scans the selected files and folders. Reads only what was selected.
@@ -98,6 +101,7 @@ pub fn scan_with_progress(
         text: Vec::new(),
         records_total: 0,
         limits_reached: BTreeSet::new(),
+        attachments: Default::default(),
     };
     for (idx, input) in inputs.iter().enumerate() {
         let collection = idx as u32;
@@ -135,6 +139,7 @@ pub fn scan_with_progress(
         limits_reached: s.limits_reached,
         limits: s.opts.limits,
         cancelled,
+        attachments: s.attachments,
     }
 }
 
@@ -174,6 +179,12 @@ impl Scanner<'_> {
             sha256: None,
             records: None,
         });
+        if let Some(fid) = crate::analyze::slack::attachment_file_id(&ctx.path) {
+            self.attachments
+                .entry(fid.to_string())
+                .or_default()
+                .push(id);
+        }
         let p = Progress {
             files_seen: self.items.len() as u64,
             bytes_read: self.budget.used(),

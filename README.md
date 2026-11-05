@@ -12,6 +12,9 @@ This repository holds:
 - `crates/scout-core`: the **assessment core** that does all the reading and
   counting.
 - `crates/scout-cli`: a **command-line driver** for the same core.
+- `crates/scout-fetch`: the optional **Attachment Downloader**, a separate
+  companion app that fetches the files a Slack export links to, directly from
+  Slack.
 
 This is the first delivery milestone, *trustworthy local inventory*. The owner
 PDF and the encrypted private dossier come in later milestones (see below).
@@ -47,6 +50,40 @@ not code-signed yet, so Windows and macOS show a first-run warning.
 
    *Save my data map* writes `.txt` and `.json` copies to
    `Documents/DataPack Scout`.
+
+### Making the data more complete
+
+The map's **Make your data more complete** card lists material your data
+refers to but you haven't added, such as images and documents shared in Slack
+or the repositories behind linked pull requests. Each item has a *How to get
+these* guide.
+
+When you add the missing files and assess again, they are matched back to the
+references. For Slack this is by file ID, using the downloader's
+`attachments/<FILE_ID>/<name>` layout. The amber satellites fill teal and the
+card shows "367 of 498 added".
+
+## Attachment Downloader
+
+A Slack export contains links to shared files, not the files themselves. The
+Attachment Downloader reads the export and downloads those files using the
+links already inside it, into `<export> attachments/attachments/<FILE_ID>/`.
+It also writes a manifest and a README; neither contains any links.
+
+- **The only DataPack Scout tool that connects to the internet.** It is a
+  separate app, so DataPack Scout itself keeps no network capability.
+- **Slack only.** Every request and every redirect must be HTTPS to a Slack
+  file host (`slack.com`, `*.slack.com`, `*.slack-edge.com`). Anything else is
+  refused. Links carry access tokens, so they are never logged, displayed in
+  full or written to disk.
+- **Handles failures:** expired or revoked links (an HTML sign-in page, 401 or
+  403), deleted files (404 or 410), files stored outside Slack, and files
+  hidden by a plan limit.
+- **Practical:** it resumes by skipping files already saved, has a Stop
+  button, caps each file at 4 GB and runs 4 parallel downloads.
+- **Tests:** `crates/scout-fetch/tests/download.rs` runs the whole flow against
+  a local server. It checks that DataPack Scout credits the downloaded files
+  back to the export.
 
 The window can only call the app's own commands. No HTTP, shell or filesystem
 plugins are granted, and a strict content security policy blocks every remote

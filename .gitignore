@@ -1,3 +1,4 @@
 /target
 *.dpm.age
 /crates/scout-app/gen
+/crates/scout-fetch/gen

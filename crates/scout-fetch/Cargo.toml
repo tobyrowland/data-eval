@@ -1,0 +1,31 @@
+[package]
+name = "scout-fetch"
+description = "DataPack Scout Attachment Downloader: fetches Slack attachments using the links in an export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "scout_fetch"
+path = "src/lib.rs"
+
+[[bin]]
+name = "datapack-scout-attachments"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+zip.workspace = true
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+
+[dev-dependencies]
+zip.workspace = true
+scout-core = { path = "../scout-core" }

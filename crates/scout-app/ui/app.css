@@ -262,6 +262,34 @@ body.scrolled .topbar { border-bottom-color: var(--line); }
 .steps li::before { content: counter(s); width: 28px; height: 28px; border-radius: 50%; background: var(--amber-soft); color: #8A5A0B; display: grid; place-items: center; font-weight: 700; font-size: 13px; }
 .privacy-foot { display: flex; gap: 10px; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; padding: 10px; text-align: center; }
 
+/* ---------- make your data more complete ---------- */
+.complete-card { padding: 20px 22px 12px; margin-bottom: 14px; }
+.complete-card .card-head { align-items: flex-start; }
+.gap-row { display: grid; grid-template-columns: 48px 1fr auto auto; gap: 14px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
+.gap-row:first-of-type { border-top: 0; }
+.gap-meter { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
+  background: conic-gradient(var(--teal-2) calc(var(--p) * 1%), #F3E2C2 0); }
+.gap-meter span { width: 34px; height: 34px; border-radius: 50%; background: var(--surface); display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--ink-2); }
+.gap-text b { display: block; font-size: 15px; }
+.gap-text span { color: var(--ink-2); font-size: 13.5px; }
+.pill { font-size: 12.5px; font-weight: 650; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+.pill.miss { background: var(--amber-soft); color: #8A5A0B; }
+.pill.part { background: #FFF4DF; color: #7A5410; box-shadow: inset 0 0 0 1px #F0D49A; }
+.pill.ok { background: var(--teal-soft); color: var(--teal); }
+.btn.small { padding: 7px 12px; font-size: 13.5px; border-radius: 10px; }
+.guide-steps { margin: 12px 0 0; padding-left: 0; list-style: none; counter-reset: g; }
+.guide-steps li { counter-increment: g; position: relative; padding: 0 0 14px 40px; color: var(--ink-2); }
+.guide-steps li::before { content: counter(g); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 50%; background: var(--teal-soft); color: var(--teal); font-weight: 700; font-size: 13px; display: grid; place-items: center; }
+.guide-steps b { color: var(--ink); }
+.guide-callout { background: var(--surface-2); border-radius: 14px; padding: 14px 16px; margin: 10px 0 14px; font-size: 14px; color: var(--ink-2); }
+.guide-callout b { color: var(--ink); }
+.guide-note { font-size: 13px; color: var(--muted); margin: 6px 0; }
+.guide-tool { display: flex; gap: 14px; align-items: center; border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin: 8px 0 14px; background: linear-gradient(120deg, #FFFBF3, #fff); }
+.guide-tool svg { width: 46px; height: 46px; flex: none; }
+.guide-tool b { display: block; }
+.guide-tool span { font-size: 13px; color: var(--ink-2); }
+code.k { background: var(--surface-2); padding: 1px 6px; border-radius: 6px; font-size: 13px; }
+
 /* ---------- panel, toast, veil, tooltip ---------- */
 .panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 92vw); background: var(--surface); box-shadow: var(--shadow-lg); z-index: 40; transform: translateX(105%); transition: transform .35s cubic-bezier(.2,.7,.2,1); overflow: auto; }
 .panel[aria-hidden="false"] { transform: none; }

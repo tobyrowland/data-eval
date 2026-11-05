@@ -204,6 +204,15 @@ fn save_map(app: AppHandle, state: State<'_, AppState>) -> Result<String, String
     Ok(txt.display().to_string())
 }
 
+/// Where the companion Attachment Downloader is published. Opening it hands
+/// the address to the user's own browser; this app makes no request itself.
+const DOWNLOAD_PAGE: &str = "https://github.com/tobyrowland/data-eval/releases/tag/v0.1.0-preview";
+
+#[tauri::command]
+fn open_download_page() -> Result<(), String> {
+    tauri_plugin_opener::open_url(DOWNLOAD_PAGE, None::<&str>).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn reveal(path: String) -> Result<(), String> {
     tauri_plugin_opener::reveal_item_in_dir(path).map_err(|e| e.to_string())
@@ -243,7 +252,8 @@ fn main() {
             assess,
             stop,
             save_map,
-            reveal
+            reveal,
+            open_download_page
         ])
         .run(tauri::generate_context!())
         .expect("DataPack Scout failed to start");

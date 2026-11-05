@@ -133,8 +133,51 @@
         } catch (err) { toast("Could not save: " + err); }
       },
       onRestart: () => { selections = []; renderSelection(); show("screen-add"); },
+      onAddMore: () => { renderSelection(); show("screen-add"); toast("Add the new files or folders, then assess again."); },
+      onGuide: (kind) => openGuide(kind),
     });
   }
+
+  // ---------------------------------------------------------------- guides
+  const TOOL_ICON = `<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="2" y="2" width="60" height="60" rx="15" fill="#14283F"/><circle cx="32" cy="29" r="13" fill="#E8AA40"/><path d="M32 21v12m-5-4 5 5 5-5M26 39h12" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const SLACK_GUIDE = `
+    <p class="eyebrow">How to get these</p>
+    <h2>Get the files shared in Slack</h2>
+    <p>Slack exports contain <b>links</b> to shared images and documents, not the files themselves. To include them, download them from Slack into a folder on this computer.</p>
+    <div class="guide-tool">${TOOL_ICON}<div><b>DataPack Scout Attachment Downloader</b><span>A separate companion app. It reads your export and downloads the files straight from Slack, using the links already inside it. It connects only to Slack and never sends anything to us.</span></div></div>
+    <button class="btn primary" data-open-download>Get the Attachment Downloader</button>
+    <p class="guide-note">Opens the download page in your web browser. DataPack Scout itself stays offline.</p>
+    <ol class="guide-steps" style="margin-top:18px">
+      <li><b>Install and open</b> the Attachment Downloader.</li>
+      <li><b>Drop in the same Slack export</b> you added here and choose <b>Download from Slack</b>. It saves the files to a folder called “<i>your export</i> attachments”.</li>
+      <li><b>Come back here</b>, choose <b>Add more files</b>, add that folder and assess again.</li>
+      <li>The amber circles on your map <b>turn teal</b> for every file found.</li>
+    </ol>
+    <div class="guide-callout"><b>Good to know</b><br>
+      Exports from Slack's Free plan only include file links from the last 90 days. Files deleted from Slack can't be downloaded, and links stop working if your workspace admin revokes the export's links. On Enterprise plans, an admin can request a Discovery API export, which includes the files themselves.</div>
+    <p class="guide-note"><b>Prefer to do it by hand?</b> Each message's <code class="k">files</code> section in the export has a download link you can open in a browser. Save each file into <code class="k">attachments/&lt;file ID&gt;/</code> so DataPack Scout can match it to its message.</p>`;
+  const GUIDES = {
+    slack_images: SLACK_GUIDE,
+    slack_files: SLACK_GUIDE,
+    code_reviews: `
+      <p class="eyebrow">How to get these</p>
+      <h2>Add the code behind the pull requests</h2>
+      <p>Your conversations link to pull requests. Adding the repositories, with their history, connects the discussion to the code changes it was about.</p>
+      <ol class="guide-steps" style="margin-top:14px">
+        <li><b>Make a full local copy</b> of each repository using <b>Clone</b> in GitHub Desktop, Bitbucket or GitLab, or <code class="k">git clone &lt;repository address&gt;</code>.</li>
+        <li><b>Avoid “Download ZIP”.</b> It leaves out the history and pull-request links that make the code valuable.</li>
+        <li>Choose <b>Add more files</b>, add the cloned folders and assess again.</li>
+      </ol>
+      <div class="guide-callout"><b>Good to know</b><br>This release counts and profiles repository files. Matching pull requests to commits and reading history arrive in a later release, so this item stays amber for now even after you add the code.</div>`,
+  };
+  function openGuide(kind) {
+    $("guide-body").innerHTML = GUIDES[kind] || "<h2>No guide yet</h2>";
+    const b = $("guide-body").querySelector("[data-open-download]");
+    if (b) b.onclick = () => invoke("open_download_page").catch((e) => toast("Could not open the page: " + e));
+    $("guide-panel").setAttribute("aria-hidden", "false");
+    $("scrim").classList.add("on");
+  }
+  $("guide-close").onclick = () => panel(false);
 
   // ---------------------------------------------------------------- chrome
   let toastTimer;
@@ -148,6 +191,7 @@
   }
   function panel(open) {
     $("privacy-panel").setAttribute("aria-hidden", String(!open));
+    if (!open) $("guide-panel").setAttribute("aria-hidden", "true");
     $("scrim").classList.toggle("on", open);
   }
   $("privacy-open").onclick = () => panel(true);

@@ -47,19 +47,22 @@ jobs:
         run: ./scripts/check-desktop-deps.sh
 
       # ---------------- desktop app installers
-      - name: Desktop app (Windows)
+      - name: Desktop apps (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        working-directory: crates/scout-app
-        run: npx -y "$TAURI_CLI" build --bundles nsis,msi
-      - name: Desktop app (macOS universal)
+        run: |
+          (cd crates/scout-app && npx -y "$TAURI_CLI" build --bundles nsis,msi)
+          (cd crates/scout-fetch && npx -y "$TAURI_CLI" build --bundles nsis,msi)
+      - name: Desktop apps (macOS universal)
         if: runner.os == 'macOS'
-        working-directory: crates/scout-app
-        run: npx -y "$TAURI_CLI" build --bundles dmg --target universal-apple-darwin
-      - name: Desktop app (Linux)
+        run: |
+          (cd crates/scout-app && npx -y "$TAURI_CLI" build --bundles dmg --target universal-apple-darwin)
+          (cd crates/scout-fetch && npx -y "$TAURI_CLI" build --bundles dmg --target universal-apple-darwin)
+      - name: Desktop apps (Linux)
         if: runner.os == 'Linux'
-        working-directory: crates/scout-app
-        run: npx -y "$TAURI_CLI" build --bundles deb,appimage
+        run: |
+          (cd crates/scout-app && npx -y "$TAURI_CLI" build --bundles deb,appimage)
+          (cd crates/scout-fetch && npx -y "$TAURI_CLI" build --bundles deb,appimage)
 
       # ---------------- command-line tool
       - name: CLI (Windows)
@@ -94,14 +97,16 @@ jobs:
         run: |
           mkdir -p out
           shopt -s nullglob
-          for f in target/release/bundle/nsis/*.exe; do cp "$f" "out/DataPack-Scout-Setup-windows-x64.exe"; done
-          for f in target/release/bundle/msi/*.msi; do cp "$f" "out/DataPack-Scout-windows-x64.msi"; done
-          for f in target/universal-apple-darwin/release/bundle/dmg/*.dmg; do cp "$f" "out/DataPack-Scout-macos-universal.dmg"; done
-          for f in target/release/bundle/appimage/*.AppImage; do cp "$f" "out/DataPack-Scout-linux-x64.AppImage"; done
-          for f in target/release/bundle/deb/*.deb; do cp "$f" "out/DataPack-Scout-linux-x64.deb"; done
+          # The companion app's bundles carry "Attachment" in their names.
+          pick() { case "$1" in *Attachment*) echo "-Attachment-Downloader";; *) echo "";; esac; }
+          for f in target/release/bundle/nsis/*.exe; do cp "$f" "out/DataPack-Scout$(pick "$f")-Setup-windows-x64.exe"; done
+          for f in target/release/bundle/msi/*.msi; do cp "$f" "out/DataPack-Scout$(pick "$f")-windows-x64.msi"; done
+          for f in target/universal-apple-darwin/release/bundle/dmg/*.dmg; do cp "$f" "out/DataPack-Scout$(pick "$f")-macos-universal.dmg"; done
+          for f in target/release/bundle/appimage/*.AppImage; do cp "$f" "out/DataPack-Scout$(pick "$f")-linux-x64.AppImage"; done
+          for f in target/release/bundle/deb/*.deb; do cp "$f" "out/DataPack-Scout$(pick "$f")-linux-x64.deb"; done
           cp DataPack-Scout-CLI-* out/
           ls -la out
-          test "$(ls out | wc -l)" -ge 2
+          test "$(ls out | wc -l)" -ge 3
 
       - uses: actions/upload-artifact@v4
         with:
@@ -143,7 +148,12 @@ jobs:
             - macOS 14+ (Apple Silicon and Intel): `DataPack-Scout-macos-universal.dmg`
             - Linux: `DataPack-Scout-linux-x64.AppImage` or `.deb`
 
-            **Command-line tool**: `DataPack-Scout-CLI-*` archives.
+            **Attachment Downloader (optional companion)**: fetches the files your Slack export links to, directly from Slack. It is the only DataPack Scout tool that connects to the internet, and it connects only to Slack.
+            - Windows: `DataPack-Scout-Attachment-Downloader-Setup-windows-x64.exe`
+            - macOS: `DataPack-Scout-Attachment-Downloader-macos-universal.dmg`
+            - Linux: `DataPack-Scout-Attachment-Downloader-linux-x64.AppImage` or `.deb`
+
+            **Command-line tool (advanced)**: `DataPack-Scout-CLI-*` archives.
 
             This preview is not code-signed yet, so you will see a first-run warning.
             - Windows: choose "More info", then "Run anyway".

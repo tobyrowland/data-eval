@@ -92,7 +92,12 @@ fn sources_use_no_network_apis() {
         for e in std::fs::read_dir(&dir).unwrap().flatten() {
             let p = e.path();
             if p.is_dir() {
-                if p.file_name().is_some_and(|n| n != "target") {
+                // The Attachment Downloader (scout-fetch) is the one crate whose
+                // purpose is downloading, from Slack only. It is a separate app;
+                // scripts/check-desktop-deps.sh keeps it out of DataPack Scout.
+                if p.file_name()
+                    .is_some_and(|n| n != "target" && n != "scout-fetch")
+                {
                     stack.push(p);
                 }
             } else if p.extension().is_some_and(|x| x == "rs")

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DataPack Scout Attachment Downloader",
+  "mainBinaryName": "DataPack Scout Attachment Downloader",
+  "version": "0.1.0",
+  "identifier": "app.datapackscout.attachments",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "DataPack Scout Attachment Downloader",
+        "width": 900,
+        "height": 760,
+        "minWidth": 760,
+        "minHeight": 640,
+        "dragDropEnabled": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'",
+      "freezePrototype": true
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Productivity",
+    "shortDescription": "Download the files shared in a Slack export, directly from Slack.",
+    "longDescription": "Companion to DataPack Scout. Reads your Slack export and downloads the shared files from Slack using the links already in the export. It connects only to Slack and never sends anything to DataPack Scout.",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "macOS": { "minimumSystemVersion": "14.0", "signingIdentity": "-" },
+    "windows": { "webviewInstallMode": { "type": "embedBootstrapper" } },
+    "linux": { "deb": { "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"] } }
+  }
+}

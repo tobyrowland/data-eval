@@ -110,8 +110,14 @@ pub struct Relationship {
     /// What is referred to, in plain words.
     pub to: &'static str,
     pub count: u64,
-    /// Whether the referenced originals are present in the selection.
+    /// Stable identifier the interface uses to pick a "how to get these" guide.
+    pub kind: &'static str,
+    /// How many of the referenced originals were found in the selection.
+    pub resolved: u64,
+    /// Whether all referenced originals are present in the selection.
     pub available_locally: bool,
+    /// Collections where matched originals were found.
+    pub found_in: Vec<String>,
     pub explanation: String,
 }
 
@@ -319,14 +325,35 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
     if let Some(p) = pct {
         summary.push(format!("We examined the contents of {p}% of the files."));
     }
+    let relationships = relationships(inv, &collections);
     let all_slack: Vec<SlackInventory> = collections.iter().flat_map(|c| c.slack.clone()).collect();
     let refs: u64 = all_slack.iter().map(|s| s.distinct_file_references).sum();
     let images: u64 = all_slack.iter().map(|s| s.referenced_image_files).sum();
-    if refs > 0 {
+    let resolved_of = |kind: &str| -> u64 {
+        relationships
+            .iter()
+            .filter(|r| r.kind == kind)
+            .map(|r| r.resolved)
+            .sum()
+    };
+    let resolved_files = resolved_of("slack_images") + resolved_of("slack_files");
+    let missing_images = images.saturating_sub(resolved_of("slack_images"));
+    if refs > 0 && resolved_files == 0 {
         summary.push(format!(
             "The conversations refer to {} (including {}) whose originals are not included.",
             plural(refs, "shared file", "shared files"),
             plural(images, "image", "images")
+        ));
+    } else if refs > 0 {
+        summary.push(format!(
+            "The conversations refer to {}; {} included in your selection and {} still missing.",
+            plural(refs, "shared file", "shared files"),
+            if resolved_files == 1 {
+                "1 is".to_string()
+            } else {
+                format!("{} are", group(resolved_files))
+            },
+            group(refs.saturating_sub(resolved_files))
         ));
     }
     let not_read = by_status[&Status::Inventoried];
@@ -350,13 +377,13 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
 
     // ---- preparation priorities, ranked by how much they change coverage
     let mut prep: Vec<(u64, String)> = Vec::new();
-    if images > 0 {
+    if missing_images > 0 {
         prep.push((
-            images,
+            missing_images,
             format!(
-                "Add the original attachments: {} referenced by conversations {} no local copy.",
-                plural(images, "image", "images"),
-                if images == 1 { "has" } else { "have" }
+                "Add the original attachments: {} referenced by conversations {} no local copy. The DataPack Scout Attachment Downloader can fetch them from Slack for you.",
+                plural(missing_images, "image", "images"),
+                if missing_images == 1 { "has" } else { "have" }
             ),
         ));
     }
@@ -403,7 +430,6 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
     }
     prep.sort_by_key(|p| std::cmp::Reverse(p.0));
 
-    let relationships = relationships(&collections);
     let activity: BTreeMap<String, u64> = collections
         .iter()
         .flat_map(|c| c.slack.iter())
@@ -447,50 +473,108 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
     }
 }
 
-fn relationships(collections: &[CollectionSummary]) -> Vec<Relationship> {
+fn relationships(inv: &Inventory, collections: &[CollectionSummary]) -> Vec<Relationship> {
+    // Attachments present on disk (not excluded or unavailable), by file ID,
+    // with the collections they were found in.
+    let mut present: HashMap<&str, Vec<u32>> = HashMap::new();
+    for (fid, ids) in &inv.attachments {
+        for &id in ids {
+            let it = &inv.items[id as usize];
+            if !matches!(it.status, Status::Excluded | Status::Unavailable) {
+                present.entry(fid.as_str()).or_default().push(it.collection);
+            }
+        }
+    }
+    let label = |c: u32| inv.collections[c as usize].label.clone();
     let mut out = Vec::new();
     for c in collections {
-        for s in &c.slack {
-            if s.referenced_image_files > 0 {
-                out.push(Relationship {
-                    from: c.label.clone(),
-                    to: "Images shared in conversations",
-                    count: s.referenced_image_files,
-                    available_locally: false,
-                    explanation: format!(
+        let Some(col) = inv.collections.iter().find(|x| x.label == c.label) else {
+            continue;
+        };
+        let (images, others) = inv.slack[col.id as usize].referenced_files();
+        let matched = |ids: &std::collections::HashSet<String>| {
+            let mut found = std::collections::BTreeSet::new();
+            let n = ids
+                .iter()
+                .filter(|id| match present.get(id.as_str()) {
+                    Some(cols) => {
+                        found.extend(cols.iter().filter(|&&x| x != col.id).map(|&x| label(x)));
+                        true
+                    }
+                    None => false,
+                })
+                .count() as u64;
+            (n, found.into_iter().collect::<Vec<_>>())
+        };
+        let (img_ok, img_found) = matched(&images);
+        let (doc_ok, doc_found) = matched(&others);
+        let n_img = images.len() as u64;
+        let n_doc = others.len() as u64;
+        if n_img > 0 {
+            out.push(Relationship {
+                from: c.label.clone(),
+                to: "Images shared in conversations",
+                kind: "slack_images",
+                count: n_img,
+                resolved: img_ok,
+                available_locally: img_ok >= n_img,
+                found_in: img_found,
+                explanation: if img_ok == 0 {
+                    format!(
                         "{} referred to in messages; the image files are not in the export.",
-                        plural(s.referenced_image_files, "image is", "images are")
-                    ),
-                });
-            }
-            let other_files = s
-                .distinct_file_references
-                .saturating_sub(s.referenced_image_files);
-            if other_files > 0 {
-                out.push(Relationship {
-                    from: c.label.clone(),
-                    to: "Documents shared in conversations",
-                    count: other_files,
-                    available_locally: false,
-                    explanation: format!(
+                        plural(n_img, "image is", "images are")
+                    )
+                } else {
+                    format!(
+                        "{} of {} images referred to in messages were found in your selection.",
+                        group(img_ok),
+                        group(n_img)
+                    )
+                },
+            });
+        }
+        if n_doc > 0 {
+            out.push(Relationship {
+                from: c.label.clone(),
+                to: "Documents shared in conversations",
+                kind: "slack_files",
+                count: n_doc,
+                resolved: doc_ok,
+                available_locally: doc_ok >= n_doc,
+                found_in: doc_found,
+                explanation: if doc_ok == 0 {
+                    format!(
                         "{} referred to in messages; the originals are not in the export.",
-                        plural(other_files, "other file is", "other files are")
-                    ),
-                });
-            }
-            let prs = s.distinct_bitbucket_pr_references + s.distinct_github_pr_references;
-            if prs > 0 {
-                out.push(Relationship {
-                    from: c.label.clone(),
-                    to: "Code reviews and repositories",
-                    count: prs,
-                    available_locally: false,
-                    explanation: format!(
-                        "{} linked from conversations. Adding the repositories would connect discussion to code.",
-                        plural(prs, "pull request is", "pull requests are")
-                    ),
-                });
-            }
+                        plural(n_doc, "other file is", "other files are")
+                    )
+                } else {
+                    format!(
+                        "{} of {} other files referred to in messages were found in your selection.",
+                        group(doc_ok),
+                        group(n_doc)
+                    )
+                },
+            });
+        }
+        let prs: u64 = c
+            .slack
+            .iter()
+            .map(|s| s.distinct_bitbucket_pr_references + s.distinct_github_pr_references)
+            .sum();
+        if prs > 0 {
+            out.push(Relationship {
+                from: c.label.clone(),
+                to: "Code reviews and repositories",
+                kind: "code_reviews",
+                count: prs,
+                resolved: 0,
+                available_locally: false,
+                found_in: Vec::new(),
+                explanation: format!(
+                    "{} linked from conversations. Adding the repositories would connect discussion to code.",
+                    plural(prs, "pull request is", "pull requests are")
+                ),
+            });
         }
     }
     out

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DataPack Scout Attachment Downloader</title>
+  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="fetch.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect x="2" y="2" width="60" height="60" rx="15" fill="#14283F"/>
+        <circle cx="32" cy="29" r="13" fill="#E8AA40"/>
+        <path d="M32 21v12m-5-4 5 5 5-5M26 39h12" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="brand-name">Attachment Downloader <span class="brand-sub">for DataPack Scout</span></span>
+    </div>
+    <span class="status-pill net"><span class="status-dot amber"></span>Connects to Slack only</span>
+  </header>
+
+  <main class="fetch-main">
+    <!-- 1: choose export -->
+    <section class="screen" id="s-choose" data-active>
+      <p class="eyebrow">Get the files shared in Slack</p>
+      <h1>Download the attachments your Slack export points to</h1>
+      <p class="lede">A Slack export contains links to shared images and documents, not the files themselves. This tool downloads them from Slack using the links already in your export, so DataPack Scout can include them.</p>
+      <div class="dropzone compact" id="dropzone" tabindex="0">
+        <svg viewBox="0 0 24 24" class="drop-arrow"><path d="M12 4v12m0 0-5-5m5 5 5-5M5 20h14"/></svg>
+        <h2 class="drop-title">Drop your Slack export here</h2>
+        <p class="drop-sub">The ZIP file Slack gave you, or the folder you unzipped it into.</p>
+        <div class="drop-actions">
+          <button class="btn secondary" id="pick-zip">Choose ZIP file</button>
+          <button class="btn secondary" id="pick-dir">Choose folder</button>
+        </div>
+      </div>
+      <div class="trust">
+        <div><b>Connects only to Slack.</b> Every download, and every redirect, is checked against Slack's own file servers. Anything else is refused.</div>
+        <div><b>Nothing goes to DataPack Scout.</b> Your files go straight from Slack to a folder on this computer.</div>
+        <div><b>Uses your export's own links.</b> No Slack sign-in or password is needed or stored.</div>
+      </div>
+    </section>
+
+    <!-- 2: review -->
+    <section class="screen" id="s-review">
+      <p class="eyebrow">Ready to download</p>
+      <h1 id="r-title">Your export</h1>
+      <div class="stat-row">
+        <div class="card stat"><strong id="r-files">0</strong><span>files to download</span></div>
+        <div class="card stat"><strong id="r-images">0</strong><span>images</span></div>
+        <div class="card stat"><strong id="r-docs">0</strong><span>documents and other files</span></div>
+        <div class="card stat"><strong id="r-size">—</strong><span>approximate size</span></div>
+      </div>
+      <p class="muted small" id="r-skipped"></p>
+      <div class="card dest">
+        <div>
+          <div class="dest-label">Save to</div>
+          <div class="dest-path" id="r-out"></div>
+        </div>
+        <button class="btn ghost" id="change-out">Change…</button>
+      </div>
+      <div class="notice">
+        <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+        <div>Pressing <b>Download from Slack</b> connects this computer to Slack's file servers. Links only work while the files still exist in Slack and your workspace admin hasn't revoked the export's links. On Slack's Free plan, exports only include links for the last 90 days.</div>
+      </div>
+      <div class="actions-row">
+        <button class="btn ghost" id="back">Choose a different export</button>
+        <button class="btn primary big" id="go">Download from Slack</button>
+      </div>
+    </section>
+
+    <!-- 3: progress -->
+    <section class="screen" id="s-progress">
+      <p class="eyebrow">Downloading from Slack</p>
+      <h1 id="p-title">0 of 0 files</h1>
+      <div class="bar"><span id="p-bar"></span></div>
+      <p class="muted" id="p-current">Starting…</p>
+      <div class="stat-row three">
+        <div class="card stat"><strong id="p-done">0</strong><span>downloaded</span></div>
+        <div class="card stat"><strong id="p-skip">0</strong><span>already here</span></div>
+        <div class="card stat"><strong id="p-fail">0</strong><span>could not download</span></div>
+      </div>
+      <p class="muted center" id="p-bytes">0 B received</p>
+      <div class="center"><button class="btn ghost" id="stop">Stop</button></div>
+    </section>
+
+    <!-- 4: done -->
+    <section class="screen" id="s-done">
+      <div class="done-badge" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m6 12 4 4 8-8"/></svg></div>
+      <p class="eyebrow center" id="d-eyebrow">Download complete</p>
+      <h1 class="center" id="d-title"></h1>
+      <p class="lede center" id="d-sub"></p>
+      <div class="card failures" id="d-failures" hidden></div>
+      <div class="card next">
+        <h3>Next: add them to your assessment</h3>
+        <ol>
+          <li>Open <b>DataPack Scout</b>.</li>
+          <li>Add your Slack export <b>and</b> the attachments folder, then choose <b>Assess my data</b>.</li>
+          <li>The amber "missing" circles on your data map will turn teal for every file found.</li>
+        </ol>
+        <div class="actions-row">
+          <button class="btn secondary" id="show">Show attachments folder</button>
+          <button class="btn ghost" id="again">Download from another export</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="drag-veil" id="drag-veil" aria-hidden="true">
+    <div class="drag-veil-card">
+      <svg viewBox="0 0 24 24" class="drop-arrow"><path d="M12 4v12m0 0-5-5m5 5 5-5M5 20h14"/></svg>
+      <strong>Drop your Slack export</strong>
+      <span>ZIP file or unzipped folder</span>
+    </div>
+  </div>
+  <div class="toast" id="toast" role="status"></div>
+  <script src="fetch.js"></script>
+</body>
+</html>
