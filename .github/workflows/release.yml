@@ -64,7 +64,7 @@ jobs:
             for d in target/release/bundle target/universal-apple-darwin/release/bundle; do
               if [ -d "$d" ]; then cp -R "$d"/. "stage/$app/"; rm -rf "$d"; fi
             done
-            ls -R "stage/$app" | head -40
+            find "stage/$app" -maxdepth 2 -type f
           done
 
       # ---------------- command-line tool
