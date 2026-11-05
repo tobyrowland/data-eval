@@ -47,22 +47,25 @@ jobs:
         run: ./scripts/check-desktop-deps.sh
 
       # ---------------- desktop app installers
-      - name: Desktop apps (Windows)
-        if: runner.os == 'Windows'
+      # Both apps bundle into the same target folders, and a later build can
+      # clear an earlier one's output, so each app's installers are moved to
+      # stage/<app>/ straight after it is built.
+      - name: Desktop apps
         shell: bash
         run: |
-          (cd crates/scout-app && npx -y "$TAURI_CLI" build --bundles nsis,msi)
-          (cd crates/scout-fetch && npx -y "$TAURI_CLI" build --bundles nsis,msi)
-      - name: Desktop apps (macOS universal)
-        if: runner.os == 'macOS'
-        run: |
-          (cd crates/scout-app && npx -y "$TAURI_CLI" build --bundles dmg --target universal-apple-darwin)
-          (cd crates/scout-fetch && npx -y "$TAURI_CLI" build --bundles dmg --target universal-apple-darwin)
-      - name: Desktop apps (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          (cd crates/scout-app && npx -y "$TAURI_CLI" build --bundles deb,appimage)
-          (cd crates/scout-fetch && npx -y "$TAURI_CLI" build --bundles deb,appimage)
+          case "$RUNNER_OS" in
+            Windows) args="--bundles nsis,msi" ;;
+            macOS)   args="--bundles dmg --target universal-apple-darwin" ;;
+            Linux)   args="--bundles deb,appimage" ;;
+          esac
+          for app in scout-app scout-fetch; do
+            (cd "crates/$app" && npx -y "$TAURI_CLI" build $args)
+            mkdir -p "stage/$app"
+            for d in target/release/bundle target/universal-apple-darwin/release/bundle; do
+              if [ -d "$d" ]; then cp -R "$d"/. "stage/$app/"; rm -rf "$d"; fi
+            done
+            ls -R "stage/$app" | head -40
+          done
 
       # ---------------- command-line tool
       - name: CLI (Windows)
@@ -97,16 +100,19 @@ jobs:
         run: |
           mkdir -p out
           shopt -s nullglob
-          # The companion app's bundles carry "Attachment" in their names.
-          pick() { case "$1" in *Attachment*) echo "-Attachment-Downloader";; *) echo "";; esac; }
-          for f in target/release/bundle/nsis/*.exe; do cp "$f" "out/DataPack-Scout$(pick "$f")-Setup-windows-x64.exe"; done
-          for f in target/release/bundle/msi/*.msi; do cp "$f" "out/DataPack-Scout$(pick "$f")-windows-x64.msi"; done
-          for f in target/universal-apple-darwin/release/bundle/dmg/*.dmg; do cp "$f" "out/DataPack-Scout$(pick "$f")-macos-universal.dmg"; done
-          for f in target/release/bundle/appimage/*.AppImage; do cp "$f" "out/DataPack-Scout$(pick "$f")-linux-x64.AppImage"; done
-          for f in target/release/bundle/deb/*.deb; do cp "$f" "out/DataPack-Scout$(pick "$f")-linux-x64.deb"; done
+          for app in scout-app scout-fetch; do
+            [ "$app" = scout-fetch ] && n="DataPack-Scout-Attachment-Downloader" || n="DataPack-Scout"
+            for f in stage/$app/nsis/*.exe; do cp "$f" "out/$n-Setup-windows-x64.exe"; done
+            for f in stage/$app/msi/*.msi; do cp "$f" "out/$n-windows-x64.msi"; done
+            for f in stage/$app/dmg/*.dmg; do cp "$f" "out/$n-macos-universal.dmg"; done
+            for f in stage/$app/appimage/*.AppImage; do cp "$f" "out/$n-linux-x64.AppImage"; done
+            for f in stage/$app/deb/*.deb; do cp "$f" "out/$n-linux-x64.deb"; done
+          done
           cp DataPack-Scout-CLI-* out/
           ls -la out
-          test "$(ls out | wc -l)" -ge 3
+          # Both apps must have produced installers for this platform.
+          test -n "$(ls out | grep -v -e CLI -e Attachment)"
+          test -n "$(ls out | grep Attachment)"
 
       - uses: actions/upload-artifact@v4
         with:
