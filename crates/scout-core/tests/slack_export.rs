@@ -132,10 +132,23 @@ fn data_map_has_relationships_formats_and_activity() {
     write(&d, "Acme Slack export.zip", &export());
     let inv = scan(&[d.join("Acme Slack export.zip")], ScanOptions::default());
     let map = build_data_map(&inv);
-    let to: Vec<_> = map.relationships.iter().map(|r| (r.to, r.count, r.available_locally)).collect();
-    assert!(to.contains(&("Images shared in conversations", 1, false)), "{to:?}");
-    assert!(to.contains(&("Documents shared in conversations", 1, false)), "{to:?}");
-    assert!(to.contains(&("Code reviews and repositories", 2, false)), "{to:?}");
+    let to: Vec<_> = map
+        .relationships
+        .iter()
+        .map(|r| (r.to, r.count, r.available_locally))
+        .collect();
+    assert!(
+        to.contains(&("Images shared in conversations", 1, false)),
+        "{to:?}"
+    );
+    assert!(
+        to.contains(&("Documents shared in conversations", 1, false)),
+        "{to:?}"
+    );
+    assert!(
+        to.contains(&("Code reviews and repositories", 2, false)),
+        "{to:?}"
+    );
     assert_eq!(map.activity.values().sum::<u64>(), 6);
     let json = &map.collections[0].formats;
     assert_eq!(json[0].format, "JSON");
