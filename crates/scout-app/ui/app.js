@@ -12,6 +12,7 @@
   let assessing = false;
   let timer = null;
   let lastSaved = null;
+  let currentMap = null;
 
   // ---------------------------------------------------------------- screens
   function show(id) {
@@ -26,8 +27,11 @@
     file: '<svg class="i" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/></svg>',
   };
 
+  const onMap = () => $("screen-map").hasAttribute("data-active");
+
   async function addPaths(paths) {
     if (!paths || !paths.length || assessing) return;
+    if (onMap() && currentMap) return addToMap(paths);
     const known = new Set(selections.map((s) => s.path));
     const fresh = paths.filter((p) => !known.has(p));
     if (!fresh.length) { toast("Already added."); return; }
@@ -64,7 +68,12 @@
   $("dropzone").addEventListener("keydown", async (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); addPaths(await invoke("pick_files")); } });
 
   // native drag and drop (paths arrive from the Rust side)
-  listen("scout://drag", (e) => document.body.classList.toggle("dragging", e.payload === "over" && !assessing));
+  listen("scout://drag", (e) => {
+    const over = e.payload === "over" && !assessing;
+    document.body.classList.toggle("dragging", over);
+    $("veil-title").textContent = onMap() ? "Drop to add to your map" : "Drop to add";
+    $("veil-sub").textContent = onMap() ? "Only the new files are read; your map updates in place" : "Files, folders and ZIP exports";
+  });
   listen("scout://drop", (e) => { document.body.classList.remove("dragging"); addPaths(e.payload); });
   // keep the webview from navigating to a dropped file
   window.addEventListener("dragover", (e) => e.preventDefault());
@@ -79,7 +88,8 @@
     });
   }
 
-  $("start").onclick = async () => {
+  $("start").onclick = () => startAssess();
+  async function startAssess() {
     if (!selections.length) return;
     assessing = true;
     show("screen-assess");
@@ -107,7 +117,99 @@
       clearInterval(timer);
       assessing = false;
     }
-  };
+  }
+
+  // ------------------------------------------------- add data to the map
+  function names(paths) {
+    const n = paths.map((p) => p.split(/[\\/]/).filter(Boolean).pop());
+    return n.length === 1 ? n[0] : `${n.length} items`;
+  }
+
+  async function addToMap(paths) {
+    if (assessing) return;
+    const known = new Set(selections.map((s) => s.path));
+    const fresh = paths.filter((p) => !known.has(p));
+    if (!fresh.length) { toast("That is already part of your map."); return; }
+    assessing = true;
+    const el = $("adding");
+    $("adding-title").textContent = `Adding ${names(fresh)}`;
+    $("adding-detail").textContent = "Reading on this computer…";
+    $("adding-stop").disabled = false; $("adding-stop").textContent = "Stop";
+    el.hidden = false;
+    requestAnimationFrame(() => el.classList.add("on"));
+    const before = currentMap;
+    try {
+      const described = await invoke("describe_paths", { paths: fresh });
+      const map = await invoke("assess_more", { paths: fresh });
+      selections.push(...described);
+      renderSelection();
+      showMap(map, diffBanner(before, map, fresh));
+    } catch (err) {
+      toast("Could not add that: " + err);
+    } finally {
+      el.classList.remove("on");
+      setTimeout(() => (el.hidden = true), 250);
+      assessing = false;
+    }
+  }
+  $("adding-stop").onclick = async () => { $("adding-stop").disabled = true; $("adding-stop").textContent = "Stopping…"; await invoke("stop"); };
+
+  /** A short, measured summary of what an addition changed. */
+  function diffBanner(a, b, paths) {
+    if (!a) return "";
+    const files = b.totals.logical_files - a.totals.logical_files;
+    const parts = [];
+    if (files > 0) parts.push(`+${num(files)} ${files === 1 ? "file" : "files"}`);
+    for (const r of b.relationships || []) {
+      const old = (a.relationships || []).find((x) => x.from === r.from && x.kind === r.kind);
+      const gained = (r.resolved || 0) - ((old && old.resolved) || 0);
+      if (gained > 0) {
+        const what = r.kind === "slack_images" ? (gained === 1 ? "image" : "images") : r.kind === "slack_files" ? (gained === 1 ? "document" : "documents") : "items";
+        parts.push(`${num(gained)} ${what} matched to conversations`);
+      }
+    }
+    const pa = a.coverage.content_examined_percent, pb = b.coverage.content_examined_percent;
+    // Only mention coverage when it improved; media added in this release is
+    // counted but not read, which lowers the share without being bad news.
+    if (pa != null && pb != null && pb - pa >= 0.1) parts.push(`contents examined ${pa}% → ${pb}%`);
+    if (!parts.length) parts.push("nothing new was found in it");
+    return `<div class="update-banner reveal"><div class="update-icon" aria-hidden="true">✓</div><div><b>Added ${esc(names(paths))}</b><span>${esc(parts.join(" · "))}</span></div></div>`;
+  }
+
+  // add-data menu: files or a folder
+  function addDataMenu(anchor) {
+    const m = $("add-menu");
+    const r = anchor.getBoundingClientRect();
+    m.style.top = r.bottom + 6 + "px";
+    m.style.left = Math.max(12, Math.min(innerWidth - 240, r.right - 230)) + "px";
+    m.hidden = false;
+    setTimeout(() => document.addEventListener("click", closeMenu, { once: true }), 0);
+  }
+  function closeMenu() { $("add-menu").hidden = true; }
+  $("menu-files").onclick = async () => { closeMenu(); const p = await invoke("pick_files"); if (p && p.length) addToMap(p); };
+  $("menu-folder").onclick = async () => { closeMenu(); const p = await invoke("pick_folder"); if (p && p.length) addToMap(p); };
+
+  // ------------------------------------------- continue where you left off
+  async function offerResume() {
+    let last = null;
+    try { last = await invoke("last_session"); } catch (_) { /* first run */ }
+    if (!last || selections.length) return;
+    const when = last.saved_unix ? new Date(last.saved_unix * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+    const list = last.paths.map((p) => p.split(/[\\/]/).filter(Boolean).pop());
+    $("resume").innerHTML = `
+      <div><p class="eyebrow">Continue where you left off</p>
+        <b>${num(list.length)} ${list.length === 1 ? "source" : "sources"}${when ? " · last assessed " + esc(when) : ""}</b>
+        <span>${esc(list.slice(0, 4).join(", "))}${list.length > 4 ? ", …" : ""}${last.missing ? ` · ${num(last.missing)} no longer found` : ""}</span></div>
+      <div class="resume-actions"><button class="btn ghost" id="resume-fresh">Start fresh</button><button class="btn primary" id="resume-go">Reopen my map</button></div>`;
+    $("resume").hidden = false;
+    $("resume-go").onclick = async () => {
+      selections = await invoke("describe_paths", { paths: last.paths });
+      renderSelection();
+      $("resume").hidden = true;
+      startAssess();
+    };
+    $("resume-fresh").onclick = async () => { await invoke("forget_session"); $("resume").hidden = true; };
+  }
 
   listen("scout://progress", (e) => {
     const p = e.payload;
@@ -115,14 +217,16 @@
     $("c-bytes").textContent = bytes(p.bytes_read);
     $("c-records").textContent = num(p.records);
     $("assess-current").textContent = `Reading ${p.collection}`;
+    if (!$("adding").hidden) $("adding-detail").textContent = `Reading ${p.collection} · ${bytes(p.bytes_read)} examined in total`;
     setStage(p.records > 0 ? 2 : p.files_seen > 3 ? 1 : 0);
   });
   listen("scout://stage", () => { setStage(3); $("assess-current").textContent = "Checking duplicates, links and gaps…"; });
   $("stop").onclick = async () => { $("stop").textContent = "Stopping…"; $("stop").disabled = true; await invoke("stop"); };
 
   // ---------------------------------------------------------------- map
-  function showMap(map) {
+  function showMap(map, banner) {
     lastSaved = null;
+    currentMap = map;
     show("screen-map");
     window.ScoutMap.render($("map-page"), map, {
       onSave: async () => {
@@ -132,10 +236,10 @@
           toast("Saved to " + parts.slice(-3, -1).join(" › "), { label: "Show in folder", run: () => invoke("reveal", { path: lastSaved }) });
         } catch (err) { toast("Could not save: " + err); }
       },
-      onRestart: () => { selections = []; renderSelection(); show("screen-add"); },
-      onAddMore: () => { renderSelection(); show("screen-add"); toast("Add the new files or folders, then assess again."); },
+      onRestart: async () => { await invoke("forget_session"); selections = []; currentMap = null; renderSelection(); show("screen-add"); },
+      onAddData: (btn) => addDataMenu(btn),
       onGuide: (kind) => openGuide(kind),
-    });
+    }, { banner });
   }
 
   // ---------------------------------------------------------------- guides
@@ -150,7 +254,7 @@
     <ol class="guide-steps" style="margin-top:18px">
       <li><b>Install and open</b> the Attachment Downloader.</li>
       <li><b>Drop in the same Slack export</b> you added here and choose <b>Download from Slack</b>. It saves the files to a folder called “<i>your export</i> attachments”.</li>
-      <li><b>Come back here</b>, choose <b>Add more files</b>, add that folder and assess again.</li>
+      <li><b>Drop that folder onto this map</b>, or choose <b>Add data</b>. Only the new files are read and your map updates in place.</li>
       <li>The amber circles on your map <b>turn teal</b> for every file found.</li>
     </ol>
     <div class="guide-callout"><b>Good to know</b><br>
@@ -166,7 +270,7 @@
       <ol class="guide-steps" style="margin-top:14px">
         <li><b>Make a full local copy</b> of each repository using <b>Clone</b> in GitHub Desktop, Bitbucket or GitLab, or <code class="k">git clone &lt;repository address&gt;</code>.</li>
         <li><b>Avoid “Download ZIP”.</b> It leaves out the history and pull-request links that make the code valuable.</li>
-        <li>Choose <b>Add more files</b>, add the cloned folders and assess again.</li>
+        <li><b>Drop the cloned folders onto this map</b>, or choose <b>Add data</b>.</li>
       </ol>
       <div class="guide-callout"><b>Good to know</b><br>This release counts and profiles repository files. Matching pull requests to commits and reading history arrive in a later release, so this item stays amber for now even after you add the code.</div>`,
   };
@@ -200,7 +304,7 @@
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") panel(false); });
   window.addEventListener("scroll", () => document.body.classList.toggle("scrolled", scrollY > 4), { passive: true });
 
-  invoke("initial_paths").then(addPaths).catch(() => {});
+  invoke("initial_paths").then((p) => (p && p.length ? addPaths(p) : offerResume())).catch(() => offerResume());
 
   window.ScoutApp = { addPaths, showMap };
 })();

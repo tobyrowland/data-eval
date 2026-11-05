@@ -31,6 +31,7 @@
     <!-- Screen: add data -->
     <section class="screen" id="screen-add" data-active>
       <div class="add-layout">
+        <div class="resume card" id="resume" hidden></div>
         <div class="hero">
           <p class="eyebrow">Step 1 of 3</p>
           <h1>Understand your company data, privately.</h1>
@@ -116,6 +117,8 @@
         <dd>Nothing. This app has no network features: no analytics, no crash uploads, no update checks, and no AI services.</dd>
         <dt>What is saved</dt>
         <dd>Only what you choose to save: your data map, in Documents › DataPack Scout. It contains counts and coverage, not your messages, documents or file paths.</dd>
+        <dt>What is remembered</dt>
+        <dd>Only the list of files and folders you added, kept in this app's private folder on this computer, so you can reopen your map later. No contents or results are stored. <b>Start fresh</b> or <b>Start again</b> forgets it.</dd>
         <dt>Getting files from Slack</dt>
         <dd>The optional Attachment Downloader is a separate app. It connects to Slack, and only Slack, to fetch files your export links to. DataPack Scout itself never connects to anything.</dd>
         <dt>Still to come</dt>
@@ -136,12 +139,22 @@
   <div class="drag-veil" id="drag-veil" aria-hidden="true">
     <div class="drag-veil-card">
       <svg viewBox="0 0 24 24" class="drop-arrow"><path d="M12 4v12m0 0-5-5m5 5 5-5M5 20h14"/></svg>
-      <strong>Drop to add</strong>
-      <span>Files, folders and ZIP exports</span>
+      <strong id="veil-title">Drop to add</strong>
+      <span id="veil-sub">Files, folders and ZIP exports</span>
     </div>
   </div>
 
   <div class="tooltip" id="tooltip" role="tooltip"></div>
+
+  <div class="adding" id="adding" role="status" hidden>
+    <div class="adding-ring" aria-hidden="true"></div>
+    <div class="adding-text"><b id="adding-title">Adding</b><span id="adding-detail"></span></div>
+    <button class="btn ghost small" id="adding-stop">Stop</button>
+  </div>
+  <div class="add-menu" id="add-menu" hidden>
+    <button id="menu-files"><svg class="i" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/></svg><span><b>Files or ZIP exports…</b><small>For example a Slack export</small></span></button>
+    <button id="menu-folder"><svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg><span><b>A folder…</b><small>For example downloaded attachments</small></span></button>
+  </div>
   <script src="map.js"></script>
   <script src="app.js"></script>
 </body>

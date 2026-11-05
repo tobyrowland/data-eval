@@ -9,7 +9,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use scout_core::report::render_text;
-use scout_core::{build_data_map, scan_with_progress, ScanOptions};
+use scout_core::{build_data_map, extend_scan, ScanOptions};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,6 +21,7 @@ use tauri_plugin_dialog::DialogExt;
 #[derive(Default)]
 struct AppState {
     cancel: Mutex<Option<Arc<AtomicBool>>>,
+    inventory: Mutex<Option<scout_core::Inventory>>,
     last: Mutex<Option<(serde_json::Value, String)>>,
 }
 
@@ -130,23 +131,30 @@ async fn pick_folder(app: AppHandle) -> Vec<String> {
         .collect()
 }
 
-#[tauri::command]
-async fn assess(
+/// Runs a scan on a background thread, either fresh or extending the
+/// current assessment, and keeps the result for later additions.
+async fn run_scan(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: &AppState,
     paths: Vec<String>,
+    extend: bool,
 ) -> Result<serde_json::Value, String> {
     let cancel = Arc::new(AtomicBool::new(false));
     *state.cancel.lock().unwrap() = Some(cancel.clone());
+    let prev = if extend {
+        state.inventory.lock().unwrap().take()
+    } else {
+        None
+    };
     let handle = app.clone();
     let inputs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-    let (json, text) = tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let opts = ScanOptions {
             cancel: Some(cancel),
             ..ScanOptions::default()
         };
         let mut last = Instant::now() - Duration::from_secs(1);
-        let inventory = scan_with_progress(&inputs, opts, &mut |p| {
+        let inventory = extend_scan(prev, &inputs, opts, &mut |p| {
             if last.elapsed() >= Duration::from_millis(80) {
                 let _ = handle.emit("scout://progress", p);
                 last = Instant::now();
@@ -155,14 +163,116 @@ async fn assess(
         let _ = handle.emit("scout://stage", "building");
         let map = build_data_map(&inventory);
         let text = render_text(&map);
-        (serde_json::to_value(&map).map_err(|e| e.to_string()), text)
+        (
+            inventory,
+            serde_json::to_value(&map).map_err(|e| e.to_string()),
+            text,
+        )
     })
     .await
     .map_err(|e| e.to_string())?;
+    let (inventory, json, text) = result;
     let json = json?;
+    remember_session(&app, &inventory);
+    *state.inventory.lock().unwrap() = Some(inventory);
     *state.last.lock().unwrap() = Some((json.clone(), text));
     *state.cancel.lock().unwrap() = None;
     Ok(json)
+}
+
+#[tauri::command]
+async fn assess(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    run_scan(app, &state, paths, false).await
+}
+
+/// Adds more files or folders to the current assessment. Only the new
+/// selections are read.
+#[tauri::command]
+async fn assess_more(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    if state.inventory.lock().unwrap().is_none() {
+        return Err("There is no assessment to add to yet.".into());
+    }
+    run_scan(app, &state, paths, true).await
+}
+
+// ------------------------------------------------------------ last session
+// Only the list of selected paths is remembered, in the app's private data
+// folder on this computer, so the owner can reopen their map later. No file
+// contents, counts or results are stored.
+
+fn session_file(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("last-assessment.json"))
+}
+
+fn remember_session(app: &AppHandle, inv: &scout_core::Inventory) {
+    let Some(f) = session_file(app) else { return };
+    let paths: Vec<String> = inv
+        .collections
+        .iter()
+        .map(|c| c.source.display().to_string())
+        .collect();
+    let saved = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Some(dir) = f.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(
+        f,
+        serde_json::json!({ "paths": paths, "saved_unix": saved }).to_string(),
+    );
+}
+
+#[derive(Serialize)]
+struct LastSession {
+    paths: Vec<String>,
+    missing: usize,
+    saved_unix: u64,
+}
+
+#[tauri::command]
+fn last_session(app: AppHandle) -> Option<LastSession> {
+    let raw = std::fs::read(session_file(&app)?).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    let all: Vec<String> = v["paths"]
+        .as_array()?
+        .iter()
+        .filter_map(|p| p.as_str().map(String::from))
+        .collect();
+    let paths: Vec<String> = all
+        .iter()
+        .filter(|p| Path::new(p).exists())
+        .cloned()
+        .collect();
+    if paths.is_empty() {
+        return None;
+    }
+    Some(LastSession {
+        missing: all.len() - paths.len(),
+        paths,
+        saved_unix: v["saved_unix"].as_u64().unwrap_or(0),
+    })
+}
+
+#[tauri::command]
+fn forget_session(app: AppHandle, state: State<'_, AppState>) {
+    if let Some(f) = session_file(&app) {
+        let _ = std::fs::remove_file(f);
+    }
+    *state.inventory.lock().unwrap() = None;
+    *state.last.lock().unwrap() = None;
 }
 
 #[tauri::command]
@@ -250,6 +360,9 @@ fn main() {
             pick_files,
             pick_folder,
             assess,
+            assess_more,
+            last_session,
+            forget_session,
             stop,
             save_map,
             reveal,

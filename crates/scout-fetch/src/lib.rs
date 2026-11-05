@@ -702,7 +702,7 @@ pub fn download(plan: &Plan, opts: &Options, progress: &mut dyn FnMut(&Progress)
         "tool": TOOL_NAME,
         "version": env!("CARGO_PKG_VERSION"),
         "export": plan.export_name,
-        "note": "Attachments downloaded from Slack using the links in this export. Add this folder to DataPack Scout alongside the export.",
+        "note": "Attachments downloaded from Slack using the links in this export. Drop this folder onto your DataPack Scout data map to add them.",
         "files": entries,
     });
     let _ = fs::write(
@@ -713,7 +713,7 @@ pub fn download(plan: &Plan, opts: &Options, progress: &mut dyn FnMut(&Progress)
         opts.out_dir.join("README.txt"),
         format!(
             "These files were downloaded from Slack by the {TOOL_NAME}, using the links in \"{}\".\n\n\
-             To include them in your assessment, add this whole folder to DataPack Scout together with the export.\n\
+             To include them, drop this whole folder onto your DataPack Scout data map (or choose Add data there).\n\
              Each file sits in a folder named after its Slack file ID, so DataPack Scout can match it to the messages that shared it.\n",
             plan.export_name
         ),

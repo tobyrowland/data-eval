@@ -54,6 +54,8 @@ pub struct Inventory {
     pub expanded_bytes_read: u64,
     pub limits: Limits,
     pub cancelled: bool,
+    /// Random identifier for this assessment, kept when data is added later.
+    pub assessment_id: String,
     /// Slack attachments found on disk, by Slack file ID, with item IDs.
     pub attachments: std::collections::BTreeMap<String, Vec<u64>>,
 }
@@ -91,9 +93,29 @@ pub fn scan_with_progress(
     opts: ScanOptions,
     progress: &mut dyn FnMut(&Progress),
 ) -> Inventory {
+    extend_scan(None, inputs, opts, progress)
+}
+
+/// Adds more selections to an existing assessment. Only the new inputs are
+/// read; earlier collections, counts and matches are kept, and references
+/// between old and new collections (for example Slack attachments added
+/// after the export) are resolved when the data map is rebuilt.
+pub fn extend_scan(
+    prev: Option<Inventory>,
+    inputs: &[PathBuf],
+    opts: ScanOptions,
+    progress: &mut dyn FnMut(&Progress),
+) -> Inventory {
+    let prev_cancelled = prev.as_ref().is_some_and(|p| p.cancelled);
+    let assessment_id = prev
+        .as_ref()
+        .map(|p| p.assessment_id.clone())
+        .unwrap_or_else(crate::report::new_assessment_id);
     let mut s = Scanner {
         progress,
-        budget: Budget::new(opts.limits.max_expanded_bytes).with_cancel(opts.cancel.clone()),
+        budget: Budget::new(opts.limits.max_expanded_bytes)
+            .with_cancel(opts.cancel.clone())
+            .with_used(prev.as_ref().map_or(0, |p| p.expanded_bytes_read)),
         opts,
         items: Vec::new(),
         collections: Vec::new(),
@@ -103,25 +125,47 @@ pub fn scan_with_progress(
         limits_reached: BTreeSet::new(),
         attachments: Default::default(),
     };
-    for (idx, input) in inputs.iter().enumerate() {
-        let collection = idx as u32;
-        let label = input
+    if let Some(p) = prev {
+        s.records_total = p.items.iter().filter_map(|i| i.records).sum();
+        s.items = p.items;
+        s.collections = p.collections;
+        s.slack = p.slack;
+        s.text = p.text;
+        s.limits_reached = p.limits_reached;
+        s.attachments = p.attachments;
+        s.limits_reached.remove(&Reason::StoppedByUser);
+    }
+    for input in inputs {
+        if s.collections.iter().any(|c| c.source == *input) {
+            continue; // already part of this assessment
+        }
+        let collection = s.collections.len() as u32;
+        let base = input
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| format!("selection-{}", idx + 1));
+            .unwrap_or_else(|| format!("selection-{}", collection + 1));
+        // Labels identify collections on the map, so keep them unique.
+        let mut label = base.clone();
+        let mut n = 2;
+        while s.collections.iter().any(|c| c.label == label) {
+            label = format!("{base} ({n})");
+            n += 1;
+        }
         s.collections.push(Collection {
             id: collection,
             label: label.clone(),
             source_kind: SourceKind::Generic,
+            source: input.clone(),
         });
         s.slack.push(SlackRecogniser::default());
         s.text.push(TextTotals::default());
-        s.visit_path(input, label, collection);
+        // Logical paths start with the selection's own name, as before.
+        s.visit_path(input, base, collection);
         if s.budget.cancelled() {
             break;
         }
     }
-    let cancelled = s.budget.cancelled();
+    let cancelled = s.budget.cancelled() || prev_cancelled;
     if cancelled {
         s.limits_reached.insert(Reason::StoppedByUser);
     }
@@ -139,6 +183,7 @@ pub fn scan_with_progress(
         limits_reached: s.limits_reached,
         limits: s.opts.limits,
         cancelled,
+        assessment_id,
         attachments: s.attachments,
     }
 }

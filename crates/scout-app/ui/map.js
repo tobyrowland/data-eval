@@ -210,7 +210,9 @@
     const [bx, by, bw, bh] = L.box;
     const tips = [];
     const tip = (html) => { tips.push(html); return `data-tip="${tips.length - 1}"`; };
-    let s = `<svg class="map-svg" viewBox="${bx.toFixed(0)} ${by.toFixed(0)} ${bw.toFixed(0)} ${bh.toFixed(0)}" role="img" aria-label="Map of your data collections">
+    // Never draw larger than 1.25x natural size, so a map with one or two
+    // collections stays legible instead of filling the card with giant type.
+    let s = `<svg class="map-svg" style="max-width:${Math.round(bw * 1.25)}px;margin:0 auto" viewBox="${bx.toFixed(0)} ${by.toFixed(0)} ${bw.toFixed(0)} ${bh.toFixed(0)}" role="img" aria-label="Map of your data collections">
       <defs>
         <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
           <rect width="6" height="6" fill="#fff"/><rect width="2.2" height="6" fill="#CAD4E0"/>
@@ -375,7 +377,8 @@
     return { value, note: `${first.slice(0, 7)} to ${last.slice(0, 7)}` };
   }
 
-  function render(root, map, handlers) {
+  function render(root, map, handlers, extra) {
+    extra = extra || {};
     attachTargets = new Map();
     for (const r of map.relationships || []) {
       for (const label of r.found_in || []) attachTargets.set(label, (attachTargets.get(label) || 0) + (r.resolved || 0));
@@ -433,10 +436,13 @@
           <div class="map-id">Assessment ${esc(map.assessment_id)} · ${esc(map.app)} ${esc(map.app_version)} · rules ${esc(map.ruleset_version)}</div>
         </div>
         <div class="actions">
-          <button class="btn secondary" data-act="restart">Start again</button>
+          <button class="btn ghost" data-act="restart">Start again</button>
+          <button class="btn secondary" data-act="adddata"><span aria-hidden="true">＋</span> Add data</button>
           <button class="btn primary" data-act="save">Save my data map</button>
         </div>
       </div>
+      ${extra.banner || ""}
+      <div class="add-hint reveal" style="animation-delay:60ms"><span class="status-dot"></span>Drop more files or folders anywhere on this page to add them to your map. Only the new material is read.</div>
 
       <div class="card summary-card reveal" style="animation-delay:80ms">
         <div style="position:relative;z-index:1">
@@ -506,7 +512,7 @@
       }).join("");
       return `<div class="card complete-card reveal" style="animation-delay:500ms">
         <div class="card-head"><div><h2>Make your data more complete</h2><p>${open ? "Your data refers to material that is not in your selection yet. Adding it makes conversations easier to follow and more valuable." : "Everything your data refers to is in your selection. Nice work."}</p></div>
-          <button class="btn ghost small" data-act="addmore">Add more files</button></div>
+          <button class="btn secondary small" data-act="adddata"><span aria-hidden="true">＋</span> Add data</button></div>
         ${rows}
       </div>`;
     }
@@ -546,8 +552,7 @@
     });
     root.querySelector('[data-act="save"]').onclick = handlers.onSave;
     root.querySelector('[data-act="restart"]').onclick = handlers.onRestart;
-    const addMoreBtn = root.querySelector('[data-act="addmore"]');
-    if (addMoreBtn) addMoreBtn.onclick = handlers.onAddMore;
+    root.querySelectorAll('[data-act="adddata"]').forEach((b) => (b.onclick = () => handlers.onAddData(b)));
     root.querySelectorAll("[data-guide]").forEach((b) => (b.onclick = () => handlers.onGuide(b.dataset.guide)));
   }
 

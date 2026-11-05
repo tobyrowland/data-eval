@@ -58,8 +58,15 @@ refers to but you haven't added, such as images and documents shared in Slack
 or the repositories behind linked pull requests. Each item has a *How to get
 these* guide.
 
-When you add the missing files and assess again, they are matched back to the
-references. For Slack this is by file ID, using the downloader's
+**Adding data keeps your map.** You can drop more files or folders anywhere on
+the map, or use *Add data*. Only the new material is read. It is merged into
+the existing assessment (`scout_core::extend_scan`), and the map updates in
+place with a banner showing what changed, such as "+479 files · 367 images
+matched to conversations". If you closed the app, the opening screen offers
+*Continue where you left off*. Only the list of selected paths is remembered,
+in the app's private data folder.
+
+Added files are matched back to the references. For Slack this is by file ID, using the downloader's
 `attachments/<FILE_ID>/<name>` layout. The amber satellites fill teal and the
 card shows "367 of 498 added".
 

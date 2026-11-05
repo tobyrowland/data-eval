@@ -443,7 +443,7 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         app: APP_NAME,
         app_version: APP_VERSION,
         ruleset_version: RULESET_VERSION,
-        assessment_id: new_assessment_id(),
+        assessment_id: inv.assessment_id.clone(),
         generated_unix: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
         summary,
         totals: t,
