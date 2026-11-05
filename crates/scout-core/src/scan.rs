@@ -12,6 +12,8 @@ use std::collections::BTreeSet;
 use std::fs::{self, File, Metadata};
 use std::io::{self, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 #[derive(Debug, Clone, Default)]
@@ -20,6 +22,18 @@ pub struct ScanOptions {
     /// Paths to exclude, relative to a selection and '/'-separated, e.g.
     /// `export.zip/random` or `Drive/Finance`. Prefix match on whole segments.
     pub exclude: Vec<String>,
+    /// Set to true from another thread to stop the scan promptly. Work done
+    /// so far is kept and reported as incomplete.
+    pub cancel: Option<Arc<AtomicBool>>,
+}
+
+/// Live counters for the progress screen.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Progress {
+    pub files_seen: u64,
+    pub bytes_read: u64,
+    pub records: u64,
+    pub collection: String,
 }
 
 /// Per-collection text statistics gathered by content parsers.
@@ -39,6 +53,7 @@ pub struct Inventory {
     pub limits_reached: BTreeSet<Reason>,
     pub expanded_bytes_read: u64,
     pub limits: Limits,
+    pub cancelled: bool,
 }
 
 struct Ctx {
@@ -49,7 +64,8 @@ struct Ctx {
     stored: u64,
 }
 
-struct Scanner {
+struct Scanner<'p> {
+    progress: &'p mut dyn FnMut(&Progress),
     opts: ScanOptions,
     items: Vec<Item>,
     collections: Vec<Collection>,
@@ -62,8 +78,19 @@ struct Scanner {
 
 /// Scans the selected files and folders. Reads only what was selected.
 pub fn scan(inputs: &[PathBuf], opts: ScanOptions) -> Inventory {
+    scan_with_progress(inputs, opts, &mut |_| {})
+}
+
+/// As [`scan`], calling `progress` after every logical item. Callers that
+/// update a UI should throttle.
+pub fn scan_with_progress(
+    inputs: &[PathBuf],
+    opts: ScanOptions,
+    progress: &mut dyn FnMut(&Progress),
+) -> Inventory {
     let mut s = Scanner {
-        budget: Budget::new(opts.limits.max_expanded_bytes),
+        progress,
+        budget: Budget::new(opts.limits.max_expanded_bytes).with_cancel(opts.cancel.clone()),
         opts,
         items: Vec::new(),
         collections: Vec::new(),
@@ -86,6 +113,13 @@ pub fn scan(inputs: &[PathBuf], opts: ScanOptions) -> Inventory {
         s.slack.push(SlackRecogniser::default());
         s.text.push(TextTotals::default());
         s.visit_path(input, label, collection);
+        if s.budget.cancelled() {
+            break;
+        }
+    }
+    let cancelled = s.budget.cancelled();
+    if cancelled {
+        s.limits_reached.insert(Reason::StoppedByUser);
     }
     for c in &mut s.collections {
         if !s.slack[c.id as usize].inventories().is_empty() {
@@ -100,11 +134,15 @@ pub fn scan(inputs: &[PathBuf], opts: ScanOptions) -> Inventory {
         text: s.text,
         limits_reached: s.limits_reached,
         limits: s.opts.limits,
+        cancelled,
     }
 }
 
-impl Scanner {
+impl Scanner<'_> {
     fn file_limit_reached(&mut self) -> bool {
+        if self.budget.cancelled() {
+            return true;
+        }
         if self.items.len() as u64 >= self.opts.limits.max_logical_files {
             self.limits_reached.insert(Reason::LogicalFileLimit);
             true
@@ -136,6 +174,13 @@ impl Scanner {
             sha256: None,
             records: None,
         });
+        let p = Progress {
+            files_seen: self.items.len() as u64,
+            bytes_read: self.budget.used(),
+            records: self.records_total,
+            collection: self.collections[ctx.collection as usize].label.clone(),
+        };
+        (self.progress)(&p);
         id
     }
 
@@ -203,7 +248,7 @@ impl Scanner {
         for e in entries {
             let child = format!("{logical}/{}", e.file_name().to_string_lossy());
             self.visit_path(&e.path(), child, collection);
-            if self.limits_reached.contains(&Reason::LogicalFileLimit) {
+            if self.limits_reached.contains(&Reason::LogicalFileLimit) || self.budget.cancelled() {
                 return;
             }
         }

@@ -5,17 +5,63 @@ existing data exports and prepare a private assessment for possible AI
 training-data licensing. Everything is assessed on the owner's computer. No
 files or contents are sent anywhere.
 
-This repository currently holds the **assessment core** (`crates/scout-core`)
-and a **command-line driver** (`crates/scout-cli`) for the first delivery
-milestone, *trustworthy local inventory*. The desktop shell, owner PDF and
-encrypted private dossier come in later milestones (see below).
+This repository holds:
+
+- `crates/scout-app`: the **desktop app** (Tauri). You drag in your exports,
+  watch the assessment run, and get a visual map of your data.
+- `crates/scout-core`: the **assessment core** that does all the reading and
+  counting.
+- `crates/scout-cli`: a **command-line driver** for the same core.
+
+This is the first delivery milestone, *trustworthy local inventory*. The owner
+PDF and the encrypted private dossier come in later milestones (see below).
 
 ## Download
 
-Preview builds for Windows, macOS and Linux are on the
-[Releases page](https://github.com/tobyrowland/data-eval/releases). Unzip the
-file and double-click `datapack-scout`. `QUICKSTART.txt` inside explains the
-first-run security prompts, because the preview is not code-signed yet.
+Preview installers are on the
+[Releases page](https://github.com/tobyrowland/data-eval/releases):
+
+- Windows: `DataPack-Scout-Setup-windows-x64.exe` or `.msi`
+- macOS: `DataPack-Scout-macos-universal.dmg`
+- Linux: `.AppImage` or `.deb`
+
+The command-line tool is in the `DataPack-Scout-CLI-*` archives. The preview is
+not code-signed yet, so Windows and macOS show a first-run warning.
+
+## The desktop app
+
+1. **Add data.** Drop files, folders or ZIP exports anywhere on the window,
+   or use *Choose files* or *Choose a folder*. Each selection shows its size
+   and file count before anything is read.
+2. **Assess.** Live counts of files, content examined and records, with the
+   stage list and a *Stop* button that keeps the work done so far.
+3. **Your data map.** You get:
+   - a summary sentence built from measured values
+   - a share-examined ring and KPI tiles
+   - an interactive map: a "Your data" hub, one circle per collection with
+     packed bubbles for formats or message types, and amber satellites for
+     material your data refers to that wasn't included (shared images,
+     documents, code repositories)
+   - an activity timeline, a coverage breakdown, source cards and ranked next
+     steps.
+
+   *Save my data map* writes `.txt` and `.json` copies to
+   `Documents/DataPack Scout`.
+
+The window can only call the app's own commands. No HTTP, shell or filesystem
+plugins are granted, and a strict content security policy blocks every remote
+origin. `scripts/check-desktop-deps.sh` fails CI if an HTTP client, a TLS
+stack, a socket library or tokio's `net` feature enters the desktop build for
+any shipped target.
+
+To develop the app:
+
+```bash
+cd crates/scout-app && npx @tauri-apps/cli@2.12.4 dev
+```
+
+On Linux, install the webview libraries first: `libwebkit2gtk-4.1-dev` and
+`libgtk-3-dev`.
 
 The `release` workflow builds and publishes them on every push to `main` or a
 `v*` tag.
@@ -93,7 +139,7 @@ private CRANQ reference fixture.
 
 | Area | Milestone |
 |---|---|
-| Tauri desktop shell (6 screens), persistent "Network access disabled" status backed by an isolation self-check | 1 |
+| Desktop app: privacy review and report-saved screens, a verified "Network access disabled" status backed by an OS isolation self-check | 1 |
 | Checkpointed pause/resume, worker processes with memory/time limits, encrypted local project store | 1 |
 | Signed and notarised Windows/macOS builds, packet-capture release tests | 1 |
 | Slack workflow-step decoding (inline step exports, code-bearing steps) needed to reproduce every CRANQ reference value | 1–2 |

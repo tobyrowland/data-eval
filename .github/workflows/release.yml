@@ -10,6 +10,7 @@ permissions:
 
 env:
   PREVIEW_TAG: v0.1.0-preview
+  TAURI_CLI: "@tauri-apps/cli@2.12.4"
 
 jobs:
   build:
@@ -21,7 +22,7 @@ jobs:
             name: windows-x64
           - os: macos-latest
             name: macos-universal
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             name: linux-x64
     runs-on: ${{ matrix.os }}
     steps:
@@ -29,45 +30,83 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-      - name: Test
-        run: cargo test --locked --release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libxdo-dev patchelf file
 
-      - name: Build (Windows)
+      - name: Test
+        run: cargo test --locked --release --workspace
+
+      - name: Check desktop dependency tree has no networking crates
+        shell: bash
+        run: ./scripts/check-desktop-deps.sh
+
+      # ---------------- desktop app installers
+      - name: Desktop app (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        working-directory: crates/scout-app
+        run: npx -y "$TAURI_CLI" build --bundles nsis,msi
+      - name: Desktop app (macOS universal)
+        if: runner.os == 'macOS'
+        working-directory: crates/scout-app
+        run: npx -y "$TAURI_CLI" build --bundles dmg --target universal-apple-darwin
+      - name: Desktop app (Linux)
+        if: runner.os == 'Linux'
+        working-directory: crates/scout-app
+        run: npx -y "$TAURI_CLI" build --bundles deb,appimage
+
+      # ---------------- command-line tool
+      - name: CLI (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
           cargo build --locked --release --bin datapack-scout
-          mkdir -p dist/DataPack-Scout
-          cp target/release/datapack-scout.exe packaging/QUICKSTART.txt dist/DataPack-Scout/
-          cd dist && 7z a -tzip ../DataPack-Scout-${{ matrix.name }}.zip DataPack-Scout
-
-      - name: Build (macOS universal)
+          mkdir -p dist/DataPack-Scout-CLI
+          cp target/release/datapack-scout.exe packaging/QUICKSTART.txt dist/DataPack-Scout-CLI/
+          (cd dist && 7z a -tzip ../DataPack-Scout-CLI-${{ matrix.name }}.zip DataPack-Scout-CLI)
+      - name: CLI (macOS universal)
         if: runner.os == 'macOS'
         run: |
           cargo build --locked --release --bin datapack-scout --target aarch64-apple-darwin
           cargo build --locked --release --bin datapack-scout --target x86_64-apple-darwin
-          mkdir -p dist/DataPack-Scout
-          lipo -create -output dist/DataPack-Scout/datapack-scout \
-            target/aarch64-apple-darwin/release/datapack-scout \
-            target/x86_64-apple-darwin/release/datapack-scout
-          chmod +x dist/DataPack-Scout/datapack-scout
-          cp packaging/QUICKSTART.txt dist/DataPack-Scout/
-          # Ad-hoc signature so Apple Silicon will run it; not a Developer ID signature.
-          codesign --force --sign - dist/DataPack-Scout/datapack-scout
-          cd dist && ditto -c -k --keepParent DataPack-Scout ../DataPack-Scout-${{ matrix.name }}.zip
-
-      - name: Build (Linux)
+          mkdir -p dist/DataPack-Scout-CLI
+          lipo -create -output dist/DataPack-Scout-CLI/datapack-scout \
+            target/aarch64-apple-darwin/release/datapack-scout target/x86_64-apple-darwin/release/datapack-scout
+          codesign --force --sign - dist/DataPack-Scout-CLI/datapack-scout
+          cp packaging/QUICKSTART.txt dist/DataPack-Scout-CLI/
+          (cd dist && ditto -c -k --keepParent DataPack-Scout-CLI ../DataPack-Scout-CLI-${{ matrix.name }}.zip)
+      - name: CLI (Linux)
         if: runner.os == 'Linux'
         run: |
           cargo build --locked --release --bin datapack-scout
-          mkdir -p dist/DataPack-Scout
-          cp target/release/datapack-scout packaging/QUICKSTART.txt dist/DataPack-Scout/
-          tar -C dist -czf DataPack-Scout-${{ matrix.name }}.tar.gz DataPack-Scout
+          mkdir -p dist/DataPack-Scout-CLI
+          cp target/release/datapack-scout packaging/QUICKSTART.txt dist/DataPack-Scout-CLI/
+          tar -C dist -czf DataPack-Scout-CLI-${{ matrix.name }}.tar.gz DataPack-Scout-CLI
+
+      - name: Collect files
+        shell: bash
+        run: |
+          mkdir -p out
+          shopt -s nullglob
+          for f in target/release/bundle/nsis/*.exe; do cp "$f" "out/DataPack-Scout-Setup-windows-x64.exe"; done
+          for f in target/release/bundle/msi/*.msi; do cp "$f" "out/DataPack-Scout-windows-x64.msi"; done
+          for f in target/universal-apple-darwin/release/bundle/dmg/*.dmg; do cp "$f" "out/DataPack-Scout-macos-universal.dmg"; done
+          for f in target/release/bundle/appimage/*.AppImage; do cp "$f" "out/DataPack-Scout-linux-x64.AppImage"; done
+          for f in target/release/bundle/deb/*.deb; do cp "$f" "out/DataPack-Scout-linux-x64.deb"; done
+          cp DataPack-Scout-CLI-* out/
+          ls -la out
+          test "$(ls out | wc -l)" -ge 2
 
       - uses: actions/upload-artifact@v4
         with:
           name: DataPack-Scout-${{ matrix.name }}
-          path: DataPack-Scout-${{ matrix.name }}.*
+          path: out/*
           if-no-files-found: error
 
   publish:
@@ -80,6 +119,14 @@ jobs:
           merge-multiple: true
       - name: Checksums
         run: cd out && sha256sum DataPack-Scout-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Remove superseded preview files
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for a in $(gh release view "$PREVIEW_TAG" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null); do
+            gh release delete-asset "$PREVIEW_TAG" "$a" -R "$GITHUB_REPOSITORY" -y
+          done
       - name: Publish preview release
         uses: softprops/action-gh-release@v2
         with:
@@ -91,11 +138,16 @@ jobs:
           body: |
             Preview build of DataPack Scout, built from ${{ github.sha }}.
 
-            Download the file for your computer, unzip it and double-click `datapack-scout`. QUICKSTART.txt inside explains the first-run security prompts: this preview is not code-signed yet.
+            **Desktop app (recommended)**: drag in your exports and get a visual map of your data.
+            - Windows 10/11: `DataPack-Scout-Setup-windows-x64.exe` (or the `.msi`)
+            - macOS 14+ (Apple Silicon and Intel): `DataPack-Scout-macos-universal.dmg`
+            - Linux: `DataPack-Scout-linux-x64.AppImage` or `.deb`
 
-            - Windows 10/11 (64-bit): DataPack-Scout-windows-x64.zip
-            - macOS 14+ (Apple Silicon and Intel): DataPack-Scout-macos-universal.zip
-            - Linux (x86-64): DataPack-Scout-linux-x64.tar.gz
+            **Command-line tool**: `DataPack-Scout-CLI-*` archives.
 
-            Everything runs on your computer. The app has no network capability.
+            This preview is not code-signed yet, so you will see a first-run warning.
+            - Windows: choose "More info", then "Run anyway".
+            - macOS: open the app once with right-click › Open, or allow it in System Settings › Privacy & Security.
+
+            Everything runs on your computer. Nothing is uploaded.
           files: out/*

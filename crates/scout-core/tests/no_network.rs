@@ -26,22 +26,54 @@ const FORBIDDEN_CRATES: &[&str] = &[
     "attohttpc",
 ];
 
+/// Walks Cargo.lock from the assessment crates. The desktop shell (Tauri)
+/// is checked per target in CI by `scripts/check-desktop-deps.sh`, because
+/// the lockfile also lists mobile-only dependencies.
 #[test]
-fn lockfile_has_no_networking_crates() {
+fn assessment_crates_have_no_networking_dependencies() {
+    use std::collections::{HashMap, HashSet};
     let lock =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock"))
             .expect("Cargo.lock is committed");
-    for line in lock.lines() {
-        if let Some(name) = line
-            .strip_prefix("name = \"")
-            .and_then(|l| l.strip_suffix('"'))
-        {
-            assert!(
-                !FORBIDDEN_CRATES.contains(&name),
-                "networking crate in dependency graph: {name}"
-            );
+    let mut deps: HashMap<String, Vec<String>> = HashMap::new();
+    for block in lock.split("[[package]]").skip(1) {
+        let mut name = String::new();
+        let mut list = Vec::new();
+        let mut in_deps = false;
+        for line in block.lines() {
+            let line = line.trim();
+            if let Some(n) = line
+                .strip_prefix("name = \"")
+                .and_then(|l| l.strip_suffix('"'))
+            {
+                name = n.to_string();
+            } else if line.starts_with("dependencies = [") {
+                in_deps = true;
+            } else if in_deps && line.starts_with(']') {
+                in_deps = false;
+            } else if in_deps {
+                let d = line.trim_matches(|c| c == '"' || c == ',');
+                list.push(d.split(' ').next().unwrap_or(d).to_string());
+            }
         }
+        deps.entry(name).or_default().extend(list);
     }
+    let mut seen = HashSet::new();
+    let mut stack = vec!["scout-core".to_string(), "scout-cli".to_string()];
+    while let Some(n) = stack.pop() {
+        if !seen.insert(n.clone()) {
+            continue;
+        }
+        assert!(
+            !FORBIDDEN_CRATES.contains(&n.as_str()),
+            "networking crate reachable from the assessment core: {n}"
+        );
+        stack.extend(deps.get(&n).cloned().unwrap_or_default());
+    }
+    assert!(
+        seen.len() > 5,
+        "dependency walk found too little; lockfile format changed?"
+    );
 }
 
 #[test]
