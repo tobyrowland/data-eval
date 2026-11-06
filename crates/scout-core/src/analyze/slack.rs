@@ -105,6 +105,8 @@ struct ExportState {
 #[derive(Default)]
 pub struct SlackRecogniser {
     exports: BTreeMap<String, ExportState>,
+    /// Language mix of messages written by people (not bots or admin events).
+    pub languages: super::language::LanguageTally,
 }
 
 fn bitbucket_re() -> &'static Regex {
@@ -175,7 +177,13 @@ impl SlackRecogniser {
                 let st = self.exports.entry(root).or_default();
                 st.channel_folders.insert(channel.to_string());
                 for m in messages {
-                    st.add_message(channel, m);
+                    if st.add_message(channel, m) {
+                        if let Some(text) = m.get("text").and_then(Value::as_str) {
+                            // Mentions and links are <...> tokens; drop them.
+                            self.languages
+                                .add_segment(&super::language::strip_markup(text));
+                        }
+                    }
                 }
             }
             _ => {}
@@ -235,25 +243,30 @@ pub fn attachment_file_id(path: &str) -> Option<&str> {
 }
 
 impl ExportState {
-    fn add_message(&mut self, channel: &str, m: &Value) {
-        let Some(obj) = m.as_object() else { return };
+    /// Records one message; returns true for a new message written by a person.
+    fn add_message(&mut self, channel: &str, m: &Value) -> bool {
+        let Some(obj) = m.as_object() else {
+            return false;
+        };
         let ts = obj.get("ts").and_then(Value::as_str).unwrap_or("");
         if !ts.is_empty()
             && !self
                 .message_keys
                 .insert((channel.to_string(), ts.to_string()))
         {
-            return; // duplicate record of the same message
+            return false; // duplicate record of the same message
         }
         self.message_records += 1;
 
         let subtype = obj.get("subtype").and_then(Value::as_str).unwrap_or("");
+        let mut by_person = false;
         if ADMIN_SUBTYPES.contains(&subtype) {
             self.admin += 1;
         } else if subtype == "bot_message" || obj.contains_key("bot_id") {
             self.bot += 1;
         } else {
             self.participant += 1;
+            by_person = true;
             if let Some(u) = obj.get("user").and_then(Value::as_str) {
                 self.posters.insert(u.to_string());
             }
@@ -312,6 +325,7 @@ impl ExportState {
             self.github_prs
                 .insert(format!("{}/{}/{}", &c[1], &c[2], &c[3]).to_ascii_lowercase());
         }
+        by_person
     }
 
     fn inventory(&self) -> SlackInventory {

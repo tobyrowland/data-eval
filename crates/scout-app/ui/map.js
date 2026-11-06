@@ -481,6 +481,7 @@
         </div>
       </div>
 
+      ${languagesBlock()}
       <div class="sources">${sources}</div>
       ${T ? stepsBlock(false) : ""}
       <div class="privacy-foot reveal" style="animation-delay:1200ms"><span class="status-dot"></span>${esc(map.privacy.statement)}</div>
@@ -491,6 +492,62 @@
         <ul class="coverage-list">${STATUS.map(([k, l, c]) => `<li class="${cov.by_status[k] ? "" : "zero"}"><i class="swatch" style="background:${c}"></i>${l}<b>${num(cov.by_status[k] || 0)}</b></li>`).join("")}</ul>
         ${reasons.length ? `<div class="reasons">${reasons.map((r) => `<div><b>${num(r.files)}</b><span>${esc(r.explanation)}</span></div>`).join("")}</div>` : ""}`;
     }
+    function languagesBlock() {
+      const l = map.languages;
+      if (!l || !l.words_examined) return "";
+      const LANG_COLORS = ["#187C75", "#2F6FB0", "#6D5BD0", "#C2577A", "#D9921F", "#5E8F3A", "#7B8AA0"];
+      const top = l.rows.slice(0, 6);
+      const colorOf = {};
+      top.forEach((r, i) => (colorOf[r.code] = LANG_COLORS[i]));
+      const otherWords = l.rows.slice(6).reduce((a, r) => a + r.words, 0);
+      const pctOf = (w) => (l.words_examined ? Math.round((w * 1000) / l.words_examined) / 10 : 0);
+      const row = (name, color, words, share, note) => `<tr>
+          <td><span class="lang-dot" style="background:${color}"></span>${esc(name)}${note ? ` <span class="muted small">${esc(note)}</span>` : ""}</td>
+          <td class="num">${num(words)}</td>
+          <td class="share"><div class="share-bar"><span style="width:${share}%;background:${color}"></span></div><b>${Number(share).toFixed(1)}%</b></td>
+        </tr>`;
+      const overall = top.map((r) => row(r.language, colorOf[r.code], r.words, r.share_percent)).join("")
+        + (otherWords ? row(`${l.rows.length - 6} other languages`, "#AEB8C6", otherWords, pctOf(otherWords)) : "")
+        + (l.undetermined_words ? row("Too short to tell", "#DDE3EA", l.undetermined_words, l.undetermined_percent, "short replies, links, emoji") : "");
+
+      // by-collection matrix: one column per top language, then other and undetermined
+      const cols = top.slice(0, 3);
+      const matrix = l.by_collection.map((c) => {
+        const cell = (w) => {
+          const p = c.words_examined ? Math.round((w * 100) / c.words_examined) : 0;
+          return `<td class="num">${w ? `${p < 1 ? "<1" : p}%` : "—"}</td>`;
+        };
+        const known = new Set(cols.map((x) => x.code));
+        const other = c.rows.filter((r) => !known.has(r.code)).reduce((a, r) => a + r.words, 0);
+        return `<tr><td class="coll" title="${esc(c.label)}">${esc(c.label)}<span class="muted small">${num(c.words_examined)} words · ${esc(c.basis)}</span></td>
+          ${cols.map((x) => cell((c.rows.find((r) => r.code === x.code) || {}).words || 0)).join("")}
+          ${cell(other)}${cell(c.undetermined_words)}</tr>`;
+      }).join("");
+
+      const en = l.english_percent;
+      const notes = [];
+      if (l.unreadable_documents) notes.push(`${num(l.unreadable_documents)} PDF and Office ${l.unreadable_documents === 1 ? "document is" : "documents are"} not included yet: reading their text arrives in a later release`);
+      if (l.sampled_documents) notes.push(`${num(l.sampled_documents)} long ${l.sampled_documents === 1 ? "document was" : "documents were"} sampled from the start (first 256 KB)`);
+      notes.push("Slack bot and integration messages are left out, so the mix reflects what people wrote");
+      return `<div class="card lang-card reveal" style="animation-delay:760ms">
+        <div class="card-head"><div><h2>Languages</h2><p>Apparent language of the readable text, measured in words</p></div>
+          ${en != null ? `<div class="lang-headline"><strong>${en}%</strong><span>of the readable text<br>is in English</span></div>` : ""}</div>
+        <div class="lang-grid">
+          <table class="lang-table">
+            <thead><tr><th>Language</th><th class="num">Words</th><th>Share</th></tr></thead>
+            <tbody>${overall}</tbody>
+          </table>
+          <div class="matrix-wrap">
+            <table class="lang-table matrix">
+              <thead><tr><th>By collection</th>${cols.map((x) => `<th class="num"><span class="lang-dot" style="background:${colorOf[x.code]}"></span>${esc(x.language)}</th>`).join("")}<th class="num">Other</th><th class="num">Unclear</th></tr></thead>
+              <tbody>${matrix}</tbody>
+            </table>
+          </div>
+        </div>
+        <p class="lang-method"><b>How this is measured.</b> ${esc(l.method)}. ${esc(notes.join(". "))}. Detection on very short or mixed-language text is less certain, and a channel's name is never used as a language label.</p>
+      </div>`;
+    }
+
     function completeBlock() {
       const rels = map.relationships || [];
       if (!rels.length) return "";

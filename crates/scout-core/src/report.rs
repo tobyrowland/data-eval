@@ -4,6 +4,7 @@
 //! and template sentences. It never carries local paths, content hashes,
 //! message text, channel names, account IDs or URLs (spec §8).
 
+use crate::analyze::language::{self, LanguageRow, LanguageTally};
 use crate::analyze::slack::{civil_from_days, SlackInventory};
 use crate::model::{empty_status_counts, Format, Reason, SourceKind, Status};
 use crate::scan::Inventory;
@@ -32,6 +33,7 @@ pub struct DataMap {
     /// Content-derived activity per calendar month (YYYY-MM), all collections.
     pub activity: BTreeMap<String, u64>,
     pub stopped_by_user: bool,
+    pub languages: LanguageSummary,
     pub privacy: Privacy,
 }
 
@@ -101,6 +103,38 @@ pub struct FormatSlice {
     pub bytes: u64,
     /// Files whose content was examined (assessed or partly assessed).
     pub examined: u64,
+}
+
+/// Apparent language mix of the readable text, with its method and limits.
+#[derive(Debug, Serialize)]
+pub struct LanguageSummary {
+    pub method: &'static str,
+    /// Words examined for language, including undetermined ones.
+    pub words_examined: u64,
+    pub undetermined_words: u64,
+    /// Share of all examined words that could not be classified.
+    pub undetermined_percent: f64,
+    /// Share of all examined words that are English (same basis as `rows`).
+    /// None when too little text could be classified to say.
+    pub english_percent: Option<f64>,
+    pub rows: Vec<LanguageRow>,
+    pub by_collection: Vec<CollectionLanguages>,
+    /// Documents whose text was sampled from the start rather than read in full.
+    pub sampled_documents: u64,
+    /// Documents with text this release cannot read yet (PDF, Office, OpenDocument).
+    pub unreadable_documents: u64,
+    /// Media and binary files, which carry no readable text.
+    pub non_text_files: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CollectionLanguages {
+    pub label: String,
+    /// "messages" for Slack conversations, "documents" otherwise.
+    pub basis: &'static str,
+    pub words_examined: u64,
+    pub undetermined_words: u64,
+    pub rows: Vec<LanguageRow>,
 }
 
 #[derive(Debug, Serialize)]
@@ -326,6 +360,29 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         summary.push(format!("We examined the contents of {p}% of the files."));
     }
     let relationships = relationships(inv, &collections);
+    let languages = language_summary(inv);
+    if let Some(en) = languages.english_percent {
+        let others: Vec<String> = languages
+            .rows
+            .iter()
+            .filter(|r| r.code != "eng")
+            .take(2)
+            .map(|r| format!("{} ({}%)", r.language, r.share_percent))
+            .collect();
+        summary.push(if others.is_empty() {
+            format!("{en}% of the readable text is in English; the rest is too short to tell.")
+        } else if en >= 50.0 {
+            format!(
+                "About {en}% of the readable text is in English; the largest other languages are {}.",
+                others.join(" and ")
+            )
+        } else {
+            format!(
+                "Only {en}% of the readable text is in English; the largest other languages are {}.",
+                others.join(" and ")
+            )
+        });
+    }
     let all_slack: Vec<SlackInventory> = collections.iter().flat_map(|c| c.slack.clone()).collect();
     let refs: u64 = all_slack.iter().map(|s| s.distinct_file_references).sum();
     let images: u64 = all_slack.iter().map(|s| s.referenced_image_files).sum();
@@ -466,10 +523,67 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         relationships,
         activity,
         stopped_by_user: inv.cancelled,
+        languages,
         privacy: Privacy {
             statement: "Everything was assessed on this computer. No files or contents were sent to us or to an AI service.",
             network: "Local assessment · Nothing is uploaded",
         },
+    }
+}
+
+fn language_summary(inv: &Inventory) -> LanguageSummary {
+    let mut all = LanguageTally::default();
+    let mut by_collection = Vec::new();
+    for c in &inv.collections {
+        let i = c.id as usize;
+        let slack = &inv.slack[i].languages;
+        let docs = &inv.text[i].languages;
+        let (tally, basis) = if slack.determined_words() + slack.undetermined_words > 0 {
+            let mut t = slack.clone();
+            t.merge(docs);
+            (t, "messages")
+        } else {
+            (docs.clone(), "documents")
+        };
+        all.merge(&tally);
+        let examined = tally.determined_words() + tally.undetermined_words;
+        if examined > 0 {
+            by_collection.push(CollectionLanguages {
+                label: c.label.clone(),
+                basis,
+                words_examined: examined,
+                undetermined_words: tally.undetermined_words,
+                rows: tally.rows(),
+            });
+        }
+    }
+    let examined = all.determined_words() + all.undetermined_words;
+    let classified = all.determined_words();
+    let english = all.by_code.get("eng").map_or(0, |v| v.0);
+    let mut unreadable = 0;
+    let mut non_text = 0;
+    for it in &inv.items {
+        if it.status == Status::Excluded {
+            continue;
+        }
+        match it.format {
+            Format::Pdf | Format::OfficeDocument | Format::OpenDocument => unreadable += 1,
+            Format::Image | Format::Audio | Format::Video | Format::Executable => non_text += 1,
+            _ => {}
+        }
+    }
+    LanguageSummary {
+        method: language::METHOD,
+        words_examined: examined,
+        undetermined_words: all.undetermined_words,
+        undetermined_percent: language::pct(all.undetermined_words, examined),
+        // Below this, a percentage would suggest more certainty than there is.
+        english_percent: (classified >= 50).then(|| language::pct(english, examined)),
+        rows: all.rows(),
+        by_collection,
+        sampled_documents: all.sampled_documents,
+        unreadable_documents: unreadable,
+        non_text_files: non_text,
     }
 }
 
@@ -618,6 +732,35 @@ pub fn render_text(m: &DataMap) -> String {
         group(m.totals.expanded_bytes),
         group(m.totals.exact_duplicate_files)
     );
+    let l = &m.languages;
+    if l.words_examined > 0 {
+        let _ = writeln!(s, "\nLanguages (words of readable text)");
+        for r in l.rows.iter().take(8) {
+            let _ = writeln!(
+                s,
+                "  {:<22} {:>12}  {:>5.1}%",
+                r.language,
+                group(r.words),
+                r.share_percent
+            );
+        }
+        if l.undetermined_words > 0 {
+            let _ = writeln!(
+                s,
+                "  {:<22} {:>12}  {:>5.1}%",
+                "Too short to tell",
+                group(l.undetermined_words),
+                l.undetermined_percent
+            );
+        }
+        if l.unreadable_documents > 0 {
+            let _ = writeln!(
+                s,
+                "  Not yet readable: {} PDF and Office documents",
+                group(l.unreadable_documents)
+            );
+        }
+    }
     if !m.preparation_priorities.is_empty() {
         let _ = writeln!(s, "\nUseful next steps");
         for (i, p) in m.preparation_priorities.iter().enumerate() {

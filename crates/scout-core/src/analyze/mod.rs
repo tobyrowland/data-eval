@@ -1,6 +1,7 @@
 //! Content parsers for the first release. Each parser streams from a reader,
 //! never executes content and never follows links.
 
+pub mod language;
 pub mod slack;
 pub mod tabular;
 pub mod text;
@@ -17,6 +18,9 @@ pub struct Outcome {
     pub words: u64,
     /// Parsed JSON document, handed on to source recognisers.
     pub json: Option<serde_json::Value>,
+    /// Leading text of a document for language detection, and whether the
+    /// document was longer than the sample. Local only.
+    pub sample: Option<(String, bool)>,
 }
 
 impl Outcome {
@@ -28,6 +32,7 @@ impl Outcome {
             text_bytes: 0,
             words: 0,
             json: None,
+            sample: None,
         }
     }
     pub fn inventoried() -> Self {
@@ -38,6 +43,7 @@ impl Outcome {
             text_bytes: 0,
             words: 0,
             json: None,
+            sample: None,
         }
     }
     pub fn with(status: Status, reason: Reason) -> Self {
@@ -48,6 +54,7 @@ impl Outcome {
             text_bytes: 0,
             words: 0,
             json: None,
+            sample: None,
         }
     }
 }

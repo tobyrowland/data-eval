@@ -41,6 +41,8 @@ pub struct Progress {
 pub struct TextTotals {
     pub text_bytes: u64,
     pub words: u64,
+    /// Language mix of readable documents (text, Markdown, HTML, email).
+    pub languages: crate::analyze::language::LanguageTally,
 }
 
 /// The private local result of a scan. Contains local paths and hashes and
@@ -750,6 +752,20 @@ impl Scanner<'_> {
         }
         let bytes = m.bytes_read();
         let sha = complete.then(|| m.finish_hash());
+        if let Some((sample, truncated)) = outcome.sample.take() {
+            use crate::analyze::language::{strip_mail_headers, strip_markup};
+            let text = match format {
+                Format::Html => Some(strip_markup(&sample)),
+                Format::Mbox | Format::Eml => Some(strip_mail_headers(&sample)),
+                Format::PlainText | Format::Markdown => Some(sample),
+                _ => None, // XML is usually data, not prose
+            };
+            if let Some(text) = text {
+                self.text[ctx.collection as usize]
+                    .languages
+                    .add_document(&text, truncated);
+            }
+        }
         if let Some(doc) = outcome.json.take() {
             self.slack[ctx.collection as usize].offer(&ctx.path, &doc);
         }

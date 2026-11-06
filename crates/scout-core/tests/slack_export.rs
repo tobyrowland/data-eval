@@ -292,3 +292,64 @@ fn adding_data_later_matches_adding_it_at_once() {
     assert_eq!(after.summary, at_once.summary);
     assert!(seen > 0);
 }
+
+#[test]
+fn language_mix_covers_messages_and_documents() {
+    let d = tempdir("lang");
+    let en =
+        "Can you check why the nightly build failed again after the dependency upgrade yesterday?";
+    let de = "Kannst du bitte prüfen, warum der nächtliche Build nach dem Update gestern wieder fehlgeschlagen ist?";
+    let day = json!([
+        {"ts": "1.1", "user": "U1", "text": en},
+        {"ts": "1.2", "user": "U1", "text": format!("<@U2> {en}")},
+        {"ts": "1.3", "user": "U2", "text": de},
+        {"ts": "1.4", "user": "U2", "text": "ok 👍"},
+        {"ts": "1.5", "bot_id": "B1", "subtype": "bot_message", "text": "Ce message automatique ne devrait pas être compté dans les langues des personnes."}
+    ]);
+    let z = zip_bytes(&[
+        (
+            "channels.json",
+            json!([{"name": "eng"}]).to_string().as_bytes(),
+        ),
+        ("users.json", b"[]"),
+        ("eng/2021-01-01.json", day.to_string().as_bytes()),
+    ]);
+    write(&d, "export.zip", &z);
+    write(&d, "docs/handbook.md", b"# Handbook\n\nOur support team answers customer questions within one working day and escalates outages to engineering immediately.\n");
+    write(&d, "docs/accueil.html", "<html><body><p>Bienvenue dans l'équipe. Ce document explique comment nous travaillons avec nos clients et nos partenaires.</p></body></html>".as_bytes());
+    write(&d, "docs/report.pdf", b"%PDF-1.7\n");
+
+    let inv = scan(
+        &[d.join("export.zip"), d.join("docs")],
+        ScanOptions::default(),
+    );
+    let map = build_data_map(&inv);
+    let l = &map.languages;
+    let code = |c: &str| {
+        l.rows
+            .iter()
+            .find(|r| r.code == c)
+            .map(|r| r.words)
+            .unwrap_or(0)
+    };
+    assert!(
+        code("eng") > code("deu") && code("deu") > 0 && code("fra") > 0,
+        "{:?}",
+        l.rows
+    );
+    assert_eq!(l.undetermined_words, 2, "\"ok 👍\" is too short to tell");
+    assert_eq!(l.unreadable_documents, 1);
+    assert_eq!(l.by_collection.len(), 2);
+    assert_eq!(l.by_collection[0].basis, "messages");
+    // the bot's French message is not counted
+    let slack_fr = l.by_collection[0].rows.iter().any(|r| r.code == "fra");
+    assert!(!slack_fr);
+    assert!(l.english_percent.is_some());
+    let text = scout_core::report::render_text(&map);
+    assert!(
+        text.contains("Languages")
+            && text.contains("English")
+            && text.contains("Too short to tell"),
+        "{text}"
+    );
+}

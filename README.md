@@ -140,6 +140,17 @@ is counted as *Excluded* and its contents are not read.
   detection), JSON, JSON Lines, plain text, Markdown, HTML, XML, EML and MBOX
   (message counts). Exact duplicates are found with local SHA-256 hashes,
   which never leave the private inventory.
+- **Language mix.** The apparent language of readable text is measured in
+  words. That covers Slack messages written by people (bot and integration
+  messages are left out), plus text, Markdown, HTML and email bodies (up to
+  256 KB sampled per document). The result is a table in the app and the CLI,
+  with a breakdown per collection.
+  - **Method:** `whatlang`'s trigram detector, run locally. Paragraphs of 60+
+    letters take the top language; 20–59 letters need a confident result;
+    anything shorter is reported as "too short to tell", not guessed. Channel
+    names are never used as language labels.
+  - **Not yet read:** PDF and Office documents, which are listed as not yet
+    readable.
 - **Slack export recogniser.** Message records split into participant, bot
   and administrative records, plus posting accounts, threads and replies with
   missing parents. It also counts file references, images, visibility,
