@@ -1,4 +1,4 @@
-//! DataPack Scout assessment core.
+//! Working Minds assessment core.
 //!
 //! Milestone 1: a trustworthy local inventory. This crate has no network
 //! capability by construction: it depends on no networking crates and uses
@@ -17,7 +17,7 @@ pub use limits::Limits;
 pub use report::{build_data_map, DataMap};
 pub use scan::{extend_scan, scan, scan_with_progress, Inventory, Progress, ScanOptions};
 
-pub const APP_NAME: &str = "DataPack Scout";
+pub const APP_NAME: &str = "Working Minds";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Version of the calculation rules; bump whenever a metric's meaning changes.
 pub const RULESET_VERSION: &str = "inventory-2026.11.1";

@@ -1,4 +1,4 @@
-# DataPack Scout
+# Working Minds
 
 A downloadable desktop application that helps a company understand its
 existing data exports and prepare a private assessment for possible AI
@@ -24,11 +24,11 @@ PDF and the encrypted private dossier come in later milestones (see below).
 Preview installers are on the
 [Releases page](https://github.com/tobyrowland/data-eval/releases):
 
-- Windows: `DataPack-Scout-Setup-windows-x64.exe` or `.msi`
-- macOS: `DataPack-Scout-macos-universal.dmg`
+- Windows: `Working-Minds-Setup-windows-x64.exe` or `.msi`
+- macOS: `Working-Minds-macos-universal.dmg`
 - Linux: `.AppImage` or `.deb`
 
-The command-line tool is in the `DataPack-Scout-CLI-*` archives. The preview is
+The command-line tool is in the `Working-Minds-CLI-*` archives. The preview is
 not code-signed yet, so Windows and macOS show a first-run warning.
 
 ## The desktop app
@@ -49,7 +49,7 @@ not code-signed yet, so Windows and macOS show a first-run warning.
      steps.
 
    *Save my data map* writes `.txt` and `.json` copies to
-   `Documents/DataPack Scout`.
+   `Documents/Working Minds`.
 
 ### Making the data more complete
 
@@ -77,8 +77,8 @@ Attachment Downloader reads the export and downloads those files using the
 links already inside it, into `<export> attachments/attachments/<FILE_ID>/`.
 It also writes a manifest and a README; neither contains any links.
 
-- **The only DataPack Scout tool that connects to the internet.** It is a
-  separate app, so DataPack Scout itself keeps no network capability.
+- **The only Working Minds tool that connects to the internet.** It is a
+  separate app, so Working Minds itself keeps no network capability.
 - **Slack only.** Every request and every redirect must be HTTPS to a Slack
   file host (`slack.com`, `*.slack.com`, `*.slack-edge.com`). Anything else is
   refused. Links carry access tokens, so they are never logged, displayed in
@@ -89,7 +89,7 @@ It also writes a manifest and a README; neither contains any links.
 - **Practical:** it resumes by skipping files already saved, has a Stop
   button, caps each file at 4 GB and runs 4 parallel downloads.
 - **Tests:** `crates/scout-fetch/tests/download.rs` runs the whole flow against
-  a local server. It checks that DataPack Scout credits the downloaded files
+  a local server. It checks that Working Minds credits the downloaded files
   back to the export.
 
 The window can only call the app's own commands. No HTTP, shell or filesystem
@@ -113,7 +113,7 @@ The `release` workflow builds and publishes them on every push to `main` or a
 ## Try it from source
 
 ```bash
-cargo run --release --bin datapack-scout -- scan ~/Downloads/slack-export.zip ~/Exports/Drive --json data-map.json
+cargo run --release --bin working-minds -- scan ~/Downloads/slack-export.zip ~/Exports/Drive --json data-map.json
 ```
 
 `--exclude <selection>/<path>` leaves out a sub-folder or archive member. It

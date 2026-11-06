@@ -231,7 +231,7 @@ pub fn is_slack_file_id(s: &str) -> bool {
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
 }
 
-/// Recognises the attachment layout written by the DataPack Scout Attachment
+/// Recognises the attachment layout written by the Working Minds Attachment
 /// Downloader (`…/attachments/<FILE_ID>/<name>`), returning the file ID.
 pub fn attachment_file_id(path: &str) -> Option<&str> {
     let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();

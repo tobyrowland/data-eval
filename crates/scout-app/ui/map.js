@@ -1,4 +1,4 @@
-/* DataPack Scout — "Your data map" renderer.
+/* Working Minds — "Your data map" renderer.
  * Pure DOM/SVG, no libraries, no network. Every label that comes from the
  * user's files is escaped before it is placed in markup. */
 (function () {

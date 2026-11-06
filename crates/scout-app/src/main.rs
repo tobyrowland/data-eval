@@ -1,4 +1,4 @@
-//! DataPack Scout desktop shell.
+//! Working Minds desktop shell.
 //!
 //! The interface is bundled HTML/CSS/JS served from the app itself; a strict
 //! content security policy blocks every remote origin. All assessment work
@@ -282,7 +282,7 @@ fn stop(state: State<'_, AppState>) {
     }
 }
 
-/// Saves the latest data map into Documents/DataPack Scout and returns the
+/// Saves the latest data map into Documents/Working Minds and returns the
 /// saved text file's path.
 #[tauri::command]
 fn save_map(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
@@ -300,7 +300,7 @@ fn save_map(app: AppHandle, state: State<'_, AppState>) -> Result<String, String
             }
         }
     };
-    let dir = base.join("DataPack Scout");
+    let dir = base.join("Working Minds");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let date = json["generated_unix"]
         .as_i64()
@@ -369,5 +369,5 @@ fn main() {
             open_download_page
         ])
         .run(tauri::generate_context!())
-        .expect("DataPack Scout failed to start");
+        .expect("Working Minds failed to start");
 }

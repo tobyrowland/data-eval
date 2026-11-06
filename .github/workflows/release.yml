@@ -72,28 +72,28 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          cargo build --locked --release --bin datapack-scout
-          mkdir -p dist/DataPack-Scout-CLI
-          cp target/release/datapack-scout.exe packaging/QUICKSTART.txt dist/DataPack-Scout-CLI/
-          (cd dist && 7z a -tzip ../DataPack-Scout-CLI-${{ matrix.name }}.zip DataPack-Scout-CLI)
+          cargo build --locked --release --bin working-minds
+          mkdir -p dist/Working-Minds-CLI
+          cp target/release/working-minds.exe packaging/QUICKSTART.txt dist/Working-Minds-CLI/
+          (cd dist && 7z a -tzip ../Working-Minds-CLI-${{ matrix.name }}.zip Working-Minds-CLI)
       - name: CLI (macOS universal)
         if: runner.os == 'macOS'
         run: |
-          cargo build --locked --release --bin datapack-scout --target aarch64-apple-darwin
-          cargo build --locked --release --bin datapack-scout --target x86_64-apple-darwin
-          mkdir -p dist/DataPack-Scout-CLI
-          lipo -create -output dist/DataPack-Scout-CLI/datapack-scout \
-            target/aarch64-apple-darwin/release/datapack-scout target/x86_64-apple-darwin/release/datapack-scout
-          codesign --force --sign - dist/DataPack-Scout-CLI/datapack-scout
-          cp packaging/QUICKSTART.txt dist/DataPack-Scout-CLI/
-          (cd dist && ditto -c -k --keepParent DataPack-Scout-CLI ../DataPack-Scout-CLI-${{ matrix.name }}.zip)
+          cargo build --locked --release --bin working-minds --target aarch64-apple-darwin
+          cargo build --locked --release --bin working-minds --target x86_64-apple-darwin
+          mkdir -p dist/Working-Minds-CLI
+          lipo -create -output dist/Working-Minds-CLI/working-minds \
+            target/aarch64-apple-darwin/release/working-minds target/x86_64-apple-darwin/release/working-minds
+          codesign --force --sign - dist/Working-Minds-CLI/working-minds
+          cp packaging/QUICKSTART.txt dist/Working-Minds-CLI/
+          (cd dist && ditto -c -k --keepParent Working-Minds-CLI ../Working-Minds-CLI-${{ matrix.name }}.zip)
       - name: CLI (Linux)
         if: runner.os == 'Linux'
         run: |
-          cargo build --locked --release --bin datapack-scout
-          mkdir -p dist/DataPack-Scout-CLI
-          cp target/release/datapack-scout packaging/QUICKSTART.txt dist/DataPack-Scout-CLI/
-          tar -C dist -czf DataPack-Scout-CLI-${{ matrix.name }}.tar.gz DataPack-Scout-CLI
+          cargo build --locked --release --bin working-minds
+          mkdir -p dist/Working-Minds-CLI
+          cp target/release/working-minds packaging/QUICKSTART.txt dist/Working-Minds-CLI/
+          tar -C dist -czf Working-Minds-CLI-${{ matrix.name }}.tar.gz Working-Minds-CLI
 
       - name: Collect files
         shell: bash
@@ -101,14 +101,14 @@ jobs:
           mkdir -p out
           shopt -s nullglob
           for app in scout-app scout-fetch; do
-            [ "$app" = scout-fetch ] && n="DataPack-Scout-Attachment-Downloader" || n="DataPack-Scout"
+            [ "$app" = scout-fetch ] && n="Working-Minds-Attachment-Downloader" || n="Working-Minds"
             for f in stage/$app/nsis/*.exe; do cp "$f" "out/$n-Setup-windows-x64.exe"; done
             for f in stage/$app/msi/*.msi; do cp "$f" "out/$n-windows-x64.msi"; done
             for f in stage/$app/dmg/*.dmg; do cp "$f" "out/$n-macos-universal.dmg"; done
             for f in stage/$app/appimage/*.AppImage; do cp "$f" "out/$n-linux-x64.AppImage"; done
             for f in stage/$app/deb/*.deb; do cp "$f" "out/$n-linux-x64.deb"; done
           done
-          cp DataPack-Scout-CLI-* out/
+          cp Working-Minds-CLI-* out/
           ls -la out
           # Both apps must have produced installers for this platform.
           test -n "$(ls out | grep -v -e CLI -e Attachment)"
@@ -116,7 +116,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DataPack-Scout-${{ matrix.name }}
+          name: Working-Minds-${{ matrix.name }}
           path: out/*
           if-no-files-found: error
 
@@ -129,7 +129,7 @@ jobs:
           path: out
           merge-multiple: true
       - name: Checksums
-        run: cd out && sha256sum DataPack-Scout-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+        run: cd out && sha256sum Working-Minds-* > SHA256SUMS.txt && cat SHA256SUMS.txt
       - name: Remove superseded preview files
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         env:
@@ -143,23 +143,23 @@ jobs:
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || env.PREVIEW_TAG }}
           target_commitish: ${{ github.sha }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && format('DataPack Scout {0}', github.ref_name) || 'DataPack Scout 0.1.0 preview' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Working Minds {0}', github.ref_name) || 'Working Minds 0.1.0 preview' }}
           prerelease: true
           make_latest: false
           body: |
-            Preview build of DataPack Scout, built from ${{ github.sha }}.
+            Preview build of Working Minds, built from ${{ github.sha }}.
 
             **Desktop app (recommended)**: drag in your exports and get a visual map of your data.
-            - Windows 10/11: `DataPack-Scout-Setup-windows-x64.exe` (or the `.msi`)
-            - macOS 14+ (Apple Silicon and Intel): `DataPack-Scout-macos-universal.dmg`
-            - Linux: `DataPack-Scout-linux-x64.AppImage` or `.deb`
+            - Windows 10/11: `Working-Minds-Setup-windows-x64.exe` (or the `.msi`)
+            - macOS 14+ (Apple Silicon and Intel): `Working-Minds-macos-universal.dmg`
+            - Linux: `Working-Minds-linux-x64.AppImage` or `.deb`
 
-            **Attachment Downloader (optional companion)**: fetches the files your Slack export links to, directly from Slack. It is the only DataPack Scout tool that connects to the internet, and it connects only to Slack.
-            - Windows: `DataPack-Scout-Attachment-Downloader-Setup-windows-x64.exe`
-            - macOS: `DataPack-Scout-Attachment-Downloader-macos-universal.dmg`
-            - Linux: `DataPack-Scout-Attachment-Downloader-linux-x64.AppImage` or `.deb`
+            **Attachment Downloader (optional companion)**: fetches the files your Slack export links to, directly from Slack. It is the only Working Minds tool that connects to the internet, and it connects only to Slack.
+            - Windows: `Working-Minds-Attachment-Downloader-Setup-windows-x64.exe`
+            - macOS: `Working-Minds-Attachment-Downloader-macos-universal.dmg`
+            - Linux: `Working-Minds-Attachment-Downloader-linux-x64.AppImage` or `.deb`
 
-            **Command-line tool (advanced)**: `DataPack-Scout-CLI-*` archives.
+            **Command-line tool (advanced)**: `Working-Minds-CLI-*` archives.
 
             This preview is not code-signed yet, so you will see a first-run warning.
             - Windows: choose "More info", then "Run anyway".

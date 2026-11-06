@@ -192,7 +192,7 @@ pub fn new_assessment_id() -> String {
     let mut b = [0u8; 6];
     rand::rngs::OsRng.fill_bytes(&mut b);
     let hex: String = b.iter().map(|x| format!("{x:02X}")).collect();
-    format!("DPS-{}-{}-{}", &hex[0..4], &hex[4..8], &hex[8..12])
+    format!("WM-{}-{}-{}", &hex[0..4], &hex[4..8], &hex[8..12])
 }
 
 pub fn build_data_map(inv: &Inventory) -> DataMap {
@@ -438,7 +438,7 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         prep.push((
             missing_images,
             format!(
-                "Add the original attachments: {} referenced by conversations {} no local copy. The DataPack Scout Attachment Downloader can fetch them from Slack for you.",
+                "Add the original attachments: {} referenced by conversations {} no local copy. The Working Minds Attachment Downloader can fetch them from Slack for you.",
                 plural(missing_images, "image", "images"),
                 if missing_images == 1 { "has" } else { "have" }
             ),

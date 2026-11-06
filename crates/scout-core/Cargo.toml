@@ -1,6 +1,6 @@
 [package]
 name = "scout-core"
-description = "DataPack Scout local assessment core (no network capability)"
+description = "Working Minds local assessment core (no network capability)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

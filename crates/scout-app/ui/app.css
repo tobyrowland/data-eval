@@ -51,6 +51,8 @@ button { font: inherit; color: inherit; }
 body.scrolled .topbar { border-bottom-color: var(--line); }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 16px; }
 .brand-mark { width: 30px; height: 30px; }
+.brand-logo { height: 32px; width: auto; display: block; }
+.brand-divider { width: 1px; height: 24px; background: var(--line); margin: 0 4px; }
 .topbar-right { display: flex; align-items: center; gap: 16px; }
 .status-pill {
   display: inline-flex; align-items: center; gap: 8px;
@@ -286,7 +288,7 @@ body.scrolled .topbar { border-bottom-color: var(--line); }
 .guide-callout b { color: var(--ink); }
 .guide-note { font-size: 13px; color: var(--muted); margin: 6px 0; }
 .guide-tool { display: flex; gap: 14px; align-items: center; border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin: 8px 0 14px; background: linear-gradient(120deg, #FFFBF3, #fff); }
-.guide-tool svg { width: 46px; height: 46px; flex: none; }
+.guide-tool svg, .guide-tool img { width: 46px; height: 46px; flex: none; }
 .guide-tool b { display: block; }
 .guide-tool span { font-size: 13px; color: var(--ink-2); }
 code.k { background: var(--surface-2); padding: 1px 6px; border-radius: 6px; font-size: 13px; }

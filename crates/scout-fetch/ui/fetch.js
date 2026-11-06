@@ -1,4 +1,4 @@
-/* DataPack Scout Attachment Downloader — interface. The webview never makes
+/* Working Minds Attachment Downloader — interface. The webview never makes
  * network requests itself; downloads run in Rust, restricted to Slack. */
 (function () {
   "use strict";

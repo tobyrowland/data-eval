@@ -1,6 +1,6 @@
 [package]
 name = "scout-fetch"
-description = "DataPack Scout Attachment Downloader: fetches Slack attachments using the links in an export"
+description = "Working Minds Attachment Downloader: fetches Slack attachments using the links in an export"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ name = "scout_fetch"
 path = "src/lib.rs"
 
 [[bin]]
-name = "datapack-scout-attachments"
+name = "working-minds-attachments"
 path = "src/main.rs"
 
 [build-dependencies]

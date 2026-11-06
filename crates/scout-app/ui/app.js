@@ -1,4 +1,4 @@
-/* DataPack Scout — screen flow and wiring to the Rust core.
+/* Working Minds — screen flow and wiring to the Rust core.
  * Talks only to the app's own commands through Tauri IPC. */
 (function () {
   "use strict";
@@ -243,14 +243,14 @@
   }
 
   // ---------------------------------------------------------------- guides
-  const TOOL_ICON = `<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="2" y="2" width="60" height="60" rx="15" fill="#14283F"/><circle cx="32" cy="29" r="13" fill="#E8AA40"/><path d="M32 21v12m-5-4 5 5 5-5M26 39h12" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const TOOL_ICON = `<img src="downloader-icon.png" alt="" width="46" height="46">`;
   const SLACK_GUIDE = `
     <p class="eyebrow">How to get these</p>
     <h2>Get the files shared in Slack</h2>
     <p>Slack exports contain <b>links</b> to shared images and documents, not the files themselves. To include them, download them from Slack into a folder on this computer.</p>
-    <div class="guide-tool">${TOOL_ICON}<div><b>DataPack Scout Attachment Downloader</b><span>A separate companion app. It reads your export and downloads the files straight from Slack, using the links already inside it. It connects only to Slack and never sends anything to us.</span></div></div>
+    <div class="guide-tool">${TOOL_ICON}<div><b>Working Minds Attachment Downloader</b><span>A separate companion app. It reads your export and downloads the files straight from Slack, using the links already inside it. It connects only to Slack and never sends anything to us.</span></div></div>
     <button class="btn primary" data-open-download>Get the Attachment Downloader</button>
-    <p class="guide-note">Opens the download page in your web browser. DataPack Scout itself stays offline.</p>
+    <p class="guide-note">Opens the download page in your web browser. Working Minds itself stays offline.</p>
     <ol class="guide-steps" style="margin-top:18px">
       <li><b>Install and open</b> the Attachment Downloader.</li>
       <li><b>Drop in the same Slack export</b> you added here and choose <b>Download from Slack</b>. It saves the files to a folder called “<i>your export</i> attachments”.</li>
@@ -259,7 +259,7 @@
     </ol>
     <div class="guide-callout"><b>Good to know</b><br>
       Exports from Slack's Free plan only include file links from the last 90 days. Files deleted from Slack can't be downloaded, and links stop working if your workspace admin revokes the export's links. On Enterprise plans, an admin can request a Discovery API export, which includes the files themselves.</div>
-    <p class="guide-note"><b>Prefer to do it by hand?</b> Each message's <code class="k">files</code> section in the export has a download link you can open in a browser. Save each file into <code class="k">attachments/&lt;file ID&gt;/</code> so DataPack Scout can match it to its message.</p>`;
+    <p class="guide-note"><b>Prefer to do it by hand?</b> Each message's <code class="k">files</code> section in the export has a download link you can open in a browser. Save each file into <code class="k">attachments/&lt;file ID&gt;/</code> so Working Minds can match it to its message.</p>`;
   const GUIDES = {
     slack_images: SLACK_GUIDE,
     slack_files: SLACK_GUIDE,
