@@ -3,6 +3,7 @@
 
 pub mod language;
 pub mod slack;
+pub mod sources;
 pub mod tabular;
 pub mod text;
 

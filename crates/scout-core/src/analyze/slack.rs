@@ -107,6 +107,9 @@ pub struct SlackRecogniser {
     exports: BTreeMap<String, ExportState>,
     /// Language mix of messages written by people (not bots or admin events).
     pub languages: super::language::LanguageTally,
+    /// Links to other systems, apps installed and bot messages. The
+    /// collection number is filled in when the data map is built.
+    pub sources: super::sources::SourceTally,
 }
 
 fn bitbucket_re() -> &'static Regex {
@@ -161,10 +164,15 @@ impl SlackRecogniser {
                         }
                     }
                     _ => {
-                        st.integration_logs = doc
-                            .get("logs")
-                            .and_then(Value::as_array)
-                            .map_or(0, |a| a.len() as u64);
+                        let logs = doc.get("logs").and_then(Value::as_array);
+                        st.integration_logs = logs.map_or(0, |a| a.len() as u64);
+                        for entry in logs.into_iter().flatten() {
+                            for key in ["service_type", "service_name", "app_type", "name"] {
+                                if let Some(n) = entry.get(key).and_then(Value::as_str) {
+                                    self.sources.note_app(n, 0);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -177,7 +185,20 @@ impl SlackRecogniser {
                 let st = self.exports.entry(root).or_default();
                 st.channel_folders.insert(channel.to_string());
                 for m in messages {
-                    if st.add_message(channel, m) {
+                    let added = st.add_message(channel, m);
+                    if added.is_some() {
+                        // Links anywhere in the record: text, attachments, blocks.
+                        self.sources.scan_text(&m.to_string(), 0);
+                        let bot_name = m
+                            .get("bot_profile")
+                            .and_then(|b| b.get("name"))
+                            .or_else(|| m.get("username"))
+                            .and_then(Value::as_str);
+                        if let (Some(name), true) = (bot_name, m.get("bot_id").is_some()) {
+                            self.sources.note_bot_message(name, 0);
+                        }
+                    }
+                    if added == Some(true) {
                         if let Some(text) = m.get("text").and_then(Value::as_str) {
                             // Mentions and links are <...> tokens; drop them.
                             self.languages
@@ -243,18 +264,17 @@ pub fn attachment_file_id(path: &str) -> Option<&str> {
 }
 
 impl ExportState {
-    /// Records one message; returns true for a new message written by a person.
-    fn add_message(&mut self, channel: &str, m: &Value) -> bool {
-        let Some(obj) = m.as_object() else {
-            return false;
-        };
+    /// Records one message. Returns None for a duplicate record, otherwise
+    /// whether the message was written by a person (not a bot or admin event).
+    fn add_message(&mut self, channel: &str, m: &Value) -> Option<bool> {
+        let obj = m.as_object()?;
         let ts = obj.get("ts").and_then(Value::as_str).unwrap_or("");
         if !ts.is_empty()
             && !self
                 .message_keys
                 .insert((channel.to_string(), ts.to_string()))
         {
-            return false; // duplicate record of the same message
+            return None; // duplicate record of the same message
         }
         self.message_records += 1;
 
@@ -325,7 +345,7 @@ impl ExportState {
             self.github_prs
                 .insert(format!("{}/{}/{}", &c[1], &c[2], &c[3]).to_ascii_lowercase());
         }
-        by_person
+        Some(by_person)
     }
 
     fn inventory(&self) -> SlackInventory {

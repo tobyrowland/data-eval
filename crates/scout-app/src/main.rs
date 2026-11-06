@@ -266,9 +266,51 @@ fn last_session(app: AppHandle) -> Option<LastSession> {
     })
 }
 
+// ------------------------------------------------------------ source list
+// The owner's edits to the data-source list (sources added or removed).
+// Stored next to the session file; service names and labels only.
+
+fn plan_file(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("source-plan.json"))
+}
+
+fn read_plan(app: &AppHandle) -> serde_json::Value {
+    plan_file(app)
+        .and_then(|f| std::fs::read(f).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_else(|| serde_json::json!({ "added": [], "removed": [] }))
+}
+
+#[tauri::command]
+fn get_source_plan(app: AppHandle) -> serde_json::Value {
+    read_plan(&app)
+}
+
+#[tauri::command]
+fn set_source_plan(app: AppHandle, plan: serde_json::Value) -> Result<(), String> {
+    // Keep only the expected shape: lists of short strings or small objects.
+    let ok = plan.get("added").is_some_and(|v| v.is_array())
+        && plan.get("removed").is_some_and(|v| v.is_array());
+    let text = plan.to_string();
+    if !ok || text.len() > 64 * 1024 {
+        return Err("Unexpected source list.".into());
+    }
+    let f = plan_file(&app).ok_or("No app data folder.")?;
+    if let Some(dir) = f.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(f, text).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn forget_session(app: AppHandle, state: State<'_, AppState>) {
     if let Some(f) = session_file(&app) {
+        let _ = std::fs::remove_file(f);
+    }
+    if let Some(f) = plan_file(&app) {
         let _ = std::fs::remove_file(f);
     }
     *state.inventory.lock().unwrap() = None;
@@ -309,7 +351,10 @@ fn save_map(app: AppHandle, state: State<'_, AppState>) -> Result<String, String
     let stem = format!("Your-Data-Map-{date}");
     let txt = dir.join(format!("{stem}.txt"));
     std::fs::write(&txt, text).map_err(|e| e.to_string())?;
-    let pretty = serde_json::to_string_pretty(json).map_err(|e| e.to_string())?;
+    // Include the owner's edits to the data-source list.
+    let mut json = json.clone();
+    json["source_plan"] = read_plan(&app);
+    let pretty = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
     std::fs::write(dir.join(format!("{stem}.json")), pretty).map_err(|e| e.to_string())?;
     Ok(txt.display().to_string())
 }
@@ -363,6 +408,8 @@ fn main() {
             assess_more,
             last_session,
             forget_session,
+            get_source_plan,
+            set_source_plan,
             stop,
             save_map,
             reveal,

@@ -51,6 +51,27 @@ not code-signed yet, so Windows and macOS show a first-run warning.
    *Save my data map* writes `.txt` and `.json` copies to
    `Documents/Working Minds`.
 
+### Page layout
+
+1. **The data map** comes first: a one-line summary and four key figures
+   above it.
+2. **Next steps** is one ranked list:
+   - files the Slack export links to but doesn't contain
+   - other systems the data refers to
+   - sources the owner added themselves
+   - remaining preparation steps
+
+   Systems are found from links in messages and documents (GitHub, Jira,
+   Google Drive, Notion, Confluence and so on), apps installed in Slack, and
+   messages from those apps' bots. Each row shows its evidence, for example
+   "507 links to 297 distinct tickets · app installed in Slack". The owner can
+   remove a suggestion, restore it, or add a source from the catalogue or
+   their own. Their edits are kept on this computer and included in the saved
+   map. Links themselves never leave the private inventory; the map carries
+   only service names and counts.
+3. **Analysis:** collections, coverage, file formats and languages tables,
+   plus activity over time.
+
 ### Making the data more complete
 
 The map's **Make your data more complete** card lists material your data

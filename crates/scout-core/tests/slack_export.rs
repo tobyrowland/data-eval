@@ -353,3 +353,80 @@ fn language_mix_covers_messages_and_documents() {
         "{text}"
     );
 }
+
+#[test]
+fn data_sources_are_built_from_links_apps_and_bots() {
+    let d = tempdir("sources");
+    let day = json!([
+        {"ts": "1.1", "user": "U1", "text": "fix in <https://github.com/acme/app/pull/7|PR 7> and https://github.com/acme/app/pull/8"},
+        {"ts": "1.2", "user": "U1", "text": "spec: https://docs.google.com/document/d/SECRETDOC/edit?usp=sharing"},
+        {"ts": "1.3", "bot_id": "B1", "subtype": "bot_message", "bot_profile": {"name": "Jira Cloud"},
+         "attachments": [{"title_link": "https://acme.atlassian.net/browse/SUP-1"}]},
+        {"ts": "1.4", "bot_id": "B1", "subtype": "bot_message", "username": "Jira Cloud", "text": "SUP-2 resolved"}
+    ]);
+    let z = zip_bytes(&[
+        ("channels.json", json!([{"name": "eng"}]).to_string().as_bytes()),
+        ("users.json", b"[]"),
+        ("integration_logs.json", json!({"logs": [{"service_type": "GitHub", "change_type": "added"}, {"app_type": "Jira Cloud"}]}).to_string().as_bytes()),
+        ("eng/2021-01-01.json", day.to_string().as_bytes()),
+    ]);
+    write(&d, "export.zip", &z);
+    write(
+        &d,
+        "docs/notes.html",
+        b"<p>Board: <a href=\"https://www.notion.so/acme/Roadmap-123\">roadmap</a></p>",
+    );
+    write(&d, "mail.mbox", b"From a@b Mon Jan 1\nFrom: a\nSubject: x\n\nSee https://docs.google.com/document/d/OTHER/edit\n");
+
+    let inv = scan(
+        &[d.join("export.zip"), d.join("docs"), d.join("mail.mbox")],
+        ScanOptions::default(),
+    );
+    let map = build_data_map(&inv);
+    let get = |id: &str| {
+        map.sources.iter().find(|s| s.id == id).unwrap_or_else(|| {
+            panic!(
+                "{id} missing: {:?}",
+                map.sources.iter().map(|s| s.id).collect::<Vec<_>>()
+            )
+        })
+    };
+    assert!(get("slack").in_selection && get("email").in_selection);
+    assert!(
+        map.sources[0].in_selection,
+        "sources already in the map come first"
+    );
+    let gh = get("github");
+    assert_eq!(
+        (gh.links, gh.distinct_targets, gh.app_installed),
+        (2, 2, true)
+    );
+    let jira = get("jira");
+    assert_eq!(
+        (jira.links, jira.bot_messages, jira.app_installed),
+        (1, 2, true)
+    );
+    let gd = get("google_drive");
+    assert_eq!((gd.links, gd.distinct_targets), (2, 2));
+    assert_eq!(
+        gd.referenced_from,
+        vec!["export.zip".to_string(), "mail.mbox".to_string()]
+    );
+    assert_eq!(get("notion").referenced_from, vec!["docs".to_string()]);
+    assert!(
+        gh.evidence.starts_with("2 links to 2 distinct pages"),
+        "{}",
+        gh.evidence
+    );
+    assert!(!map.source_catalog.is_empty());
+    let json = serde_json::to_string(&map).unwrap();
+    for leak in [
+        "SECRETDOC",
+        "acme/app/pull",
+        "atlassian.net",
+        "notion.so/acme",
+        "OTHER",
+    ] {
+        assert!(!json.contains(leak), "data map leaked {leak}");
+    }
+}

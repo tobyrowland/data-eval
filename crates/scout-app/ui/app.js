@@ -224,9 +224,11 @@
   $("stop").onclick = async () => { $("stop").textContent = "Stopping…"; $("stop").disabled = true; await invoke("stop"); };
 
   // ---------------------------------------------------------------- map
-  function showMap(map, banner) {
+  async function showMap(map, banner) {
     lastSaved = null;
     currentMap = map;
+    let plan = null;
+    try { plan = await invoke("get_source_plan"); } catch (_) { /* first run */ }
     show("screen-map");
     window.ScoutMap.render($("map-page"), map, {
       onSave: async () => {
@@ -239,7 +241,8 @@
       onRestart: async () => { await invoke("forget_session"); selections = []; currentMap = null; renderSelection(); show("screen-add"); },
       onAddData: (btn) => addDataMenu(btn),
       onGuide: (kind) => openGuide(kind),
-    }, { banner });
+      onPlan: (p) => invoke("set_source_plan", { plan: p }).catch((e) => toast("Could not save your list: " + e)),
+    }, { banner, plan });
   }
 
   // ---------------------------------------------------------------- guides
@@ -274,8 +277,49 @@
       </ol>
       <div class="guide-callout"><b>Good to know</b><br>This release counts and profiles repository files. Matching pull requests to commits and reading history arrive in a later release, so this item stays amber for now even after you add the code.</div>`,
   };
+  // How to export each kind of source. Kept short; the owner follows the
+  // service's own admin screens. Nothing here is fetched from the internet.
+  const EXPORT_GUIDES = {
+    github: ["Clone each repository with its full history, using GitHub Desktop or <code class=\"k\">git clone</code>. Avoid “Download ZIP”, which drops the history.", "Pull requests and issues aren't part of a clone. An organisation owner can export them as a migration archive."],
+    gitlab: ["Clone each repository with its full history (<code class=\"k\">git clone</code>).", "To include issues and merge requests, export the project from its settings (Export project)."],
+    bitbucket: ["Clone each repository with its full history (<code class=\"k\">git clone</code>).", "Pull requests aren't part of a clone; note which repositories they belong to so they can be exported separately."],
+    jira: ["From an issue search, export the issues (CSV) including comments.", "For everything, a Jira admin can create a site backup in the backup manager."],
+    linear: ["A workspace admin can export issues as CSV from the workspace settings."],
+    asana: ["Export a project as CSV or JSON from its menu, or ask an admin for an organisation export."],
+    trello: ["Export a board as JSON from the board menu (Print, export and share)."],
+    google_drive: ["Use Google Takeout and choose Drive. Docs, Sheets and Slides arrive as Office files.", "Unzip the download or add the ZIP files as they are."],
+    notion: ["A workspace owner can export all content from Settings (Export all workspace content), as Markdown and CSV."],
+    confluence: ["Export each space (HTML or XML) from its space settings, or ask an admin for a site backup."],
+    microsoft365: ["Sync or download the relevant OneDrive or SharePoint folders to this computer, then add the folder."],
+    dropbox: ["Download the relevant folders, or let the Dropbox app sync them, then add the folder."],
+    box: ["Download the relevant folders from Box, then add the folder."],
+    figma: ["Design files are of limited use as training data. If they matter, export them from Figma's File menu."],
+    miro: ["Export boards from the board menu. Like design files, they are usually of limited use as training data."],
+    zendesk: ["An admin can request a data export (JSON or CSV) from the admin centre. Tickets with comments are the valuable part."],
+    intercom: ["An admin can export conversations from the workspace settings (data export)."],
+    salesforce: ["An admin can run the Data Export service from Setup and download the files when it finishes."],
+    hubspot: ["Export records and their activity from each object view, or ask an admin for an account export."],
+    sentry: ["Issue data can be exported from Sentry's organisation settings, or through its API by an admin."],
+    datadog: ["Monitoring data is usually of limited use as training data. If incidents and notes matter, export them from Datadog."],
+    pagerduty: ["Incident history can be exported as CSV from the incidents and analytics pages."],
+    circleci: ["Build history is mostly already visible through bot messages. Exports need an admin and its API."],
+    loom: ["Videos can be downloaded one by one from Loom. Transcripts are often more useful than the video itself."],
+    zoom: ["Cloud recordings and transcripts can be downloaded from the Zoom web portal (Recordings)."],
+    airtable: ["Download each table as CSV from its view menu."],
+    email: ["Export mailboxes as MBOX (Google Takeout for Gmail) or EML, then add the files."],
+    custom: ["Look for an export, download or backup option in the service's admin settings.", "Then add the exported files or folder to your map."],
+  };
+  function exportGuide(id) {
+    const s = ((currentMap && currentMap.source_catalog) || []).find((x) => x.id === id);
+    const steps = EXPORT_GUIDES[id] || EXPORT_GUIDES.custom;
+    const src = ((currentMap && currentMap.sources) || []).find((x) => x.id === id);
+    return `<p class="eyebrow">How to export</p><h2>${esc(s ? s.name : "Your source")}</h2>
+      ${src && src.evidence ? `<div class="guide-callout"><b>Why it's suggested</b><br>${esc(src.evidence)}${src.referenced_from && src.referenced_from.length ? `, in ${esc(src.referenced_from.join(", "))}` : ""}.</div>` : ""}
+      <ol class="guide-steps">${steps.map((x) => `<li>${x}</li>`).join("")}<li><b>Drop the export onto your map</b>, or choose <b>Add data</b>. Only the new material is read.</li></ol>
+      <p class="guide-note">Exports stay on this computer. Working Minds reads them locally and never connects to these services.</p>`;
+  }
   function openGuide(kind) {
-    $("guide-body").innerHTML = GUIDES[kind] || "<h2>No guide yet</h2>";
+    $("guide-body").innerHTML = kind.startsWith("export:") ? exportGuide(kind.slice(7)) : GUIDES[kind] || "<h2>No guide yet</h2>";
     const b = $("guide-body").querySelector("[data-open-download]");
     if (b) b.onclick = () => invoke("open_download_page").catch((e) => toast("Could not open the page: " + e));
     $("guide-panel").setAttribute("aria-hidden", "false");

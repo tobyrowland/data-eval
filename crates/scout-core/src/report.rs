@@ -6,12 +6,13 @@
 
 use crate::analyze::language::{self, LanguageRow, LanguageTally};
 use crate::analyze::slack::{civil_from_days, SlackInventory};
+use crate::analyze::sources::{Service, SourceTally, CATALOG};
 use crate::model::{empty_status_counts, Format, Reason, SourceKind, Status};
 use crate::scan::Inventory;
 use crate::{APP_NAME, APP_VERSION, RULESET_VERSION};
 use rand::RngCore;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Serialize)]
@@ -34,6 +35,10 @@ pub struct DataMap {
     pub activity: BTreeMap<String, u64>,
     pub stopped_by_user: bool,
     pub languages: LanguageSummary,
+    /// Systems this data comes from or refers to, with the evidence for each.
+    pub sources: Vec<SourceEntry>,
+    /// Every service the owner can pick from when adding a source.
+    pub source_catalog: &'static [Service],
     pub privacy: Privacy,
 }
 
@@ -103,6 +108,27 @@ pub struct FormatSlice {
     pub bytes: u64,
     /// Files whose content was examined (assessed or partly assessed).
     pub examined: u64,
+}
+
+/// One data source: already in the map, or referenced by data that is.
+#[derive(Debug, Serialize)]
+pub struct SourceEntry {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub category: &'static str,
+    /// Some of this source's data is already part of the assessment.
+    pub in_selection: bool,
+    /// Collections that are this source (for sources already in the map).
+    pub collections: Vec<String>,
+    pub links: u64,
+    pub distinct_targets: u64,
+    pub target_noun: &'static str,
+    pub app_installed: bool,
+    pub bot_messages: u64,
+    /// Collections whose content links to or mentions this source.
+    pub referenced_from: Vec<String>,
+    /// One plain-English line summarising the evidence.
+    pub evidence: String,
 }
 
 /// Apparent language mix of the readable text, with its method and limits.
@@ -524,11 +550,115 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         activity,
         stopped_by_user: inv.cancelled,
         languages,
+        sources: source_entries(inv),
+        source_catalog: CATALOG,
         privacy: Privacy {
             statement: "Everything was assessed on this computer. No files or contents were sent to us or to an AI service.",
             network: "Local assessment · Nothing is uploaded",
         },
     }
+}
+
+fn source_entries(inv: &Inventory) -> Vec<SourceEntry> {
+    let mut all = SourceTally::default();
+    for c in &inv.collections {
+        let i = c.id as usize;
+        // The Slack recogniser does not know its collection number.
+        let mut slack = inv.slack[i].sources.clone();
+        for s in slack.by_service.values_mut() {
+            s.collections = [c.id].into_iter().collect();
+        }
+        all.merge(&slack);
+        all.merge(&inv.text[i].sources);
+    }
+    // Sources whose data is already in the assessment.
+    let mut present: BTreeMap<&'static str, BTreeSet<String>> = BTreeMap::new();
+    for c in &inv.collections {
+        if c.source_kind == SourceKind::SlackExport {
+            present.entry("slack").or_default().insert(c.label.clone());
+        }
+    }
+    for it in &inv.items {
+        if matches!(it.format, Format::Mbox | Format::Eml) && it.status != Status::Excluded {
+            present
+                .entry("email")
+                .or_default()
+                .insert(inv.collections[it.collection as usize].label.clone());
+        }
+    }
+    let label = |c: u32| inv.collections[c as usize].label.clone();
+    let mut ids: BTreeSet<&'static str> = all.by_service.keys().copied().collect();
+    ids.extend(present.keys().copied());
+    let mut out: Vec<(u64, SourceEntry)> = ids
+        .into_iter()
+        .filter_map(|id| {
+            let svc = crate::analyze::sources::service(id)?;
+            let st = all.by_service.get(id).cloned().unwrap_or_default();
+            let in_selection = present.contains_key(id);
+            let distinct = st.targets.len() as u64;
+            let mut parts = Vec::new();
+            if st.links > 0 {
+                let noun = if distinct == 1 {
+                    svc.target_noun.trim_end_matches('s')
+                } else {
+                    svc.target_noun
+                };
+                parts.push(format!(
+                    "{} to {} distinct {}",
+                    plural(st.links, "link", "links"),
+                    group(distinct),
+                    noun
+                ));
+            }
+            if st.app_installed {
+                parts.push("app installed in Slack".to_string());
+            }
+            if st.bot_messages > 0 {
+                parts.push(format!(
+                    "{} from its bot",
+                    plural(st.bot_messages, "message", "messages")
+                ));
+            }
+            let collections: Vec<String> = present
+                .get(id)
+                .map(|s| s.iter().cloned().collect())
+                .unwrap_or_default();
+            let evidence = if parts.is_empty() {
+                format!("In your map: {}", collections.join(", "))
+            } else {
+                let mut e = parts.join(" · ");
+                e[..1].make_ascii_uppercase();
+                e
+            };
+            let score = if in_selection {
+                u64::MAX
+            } else {
+                distinct * 3
+                    + st.links
+                    + st.bot_messages / 2
+                    + if st.app_installed { 50 } else { 0 }
+            };
+            Some((
+                score,
+                SourceEntry {
+                    id,
+                    name: svc.name,
+                    category: svc.category,
+                    in_selection,
+                    collections,
+                    links: st.links,
+                    distinct_targets: distinct,
+                    target_noun: svc.target_noun,
+                    app_installed: st.app_installed,
+                    bot_messages: st.bot_messages,
+                    referenced_from: st.collections.iter().map(|&c| label(c)).collect(),
+                    evidence,
+                },
+            ))
+        })
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.cmp(b.1.name)));
+    out.into_iter().map(|e| e.1).collect()
 }
 
 fn language_summary(inv: &Inventory) -> LanguageSummary {
