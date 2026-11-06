@@ -1,6 +1,6 @@
-//! DataPack Scout Attachment Downloader: desktop shell.
+//! Working Minds Attachment Downloader: desktop shell.
 //!
-//! Companion to DataPack Scout. Unlike the assessment app, this tool makes
+//! Companion to Working Minds. Unlike the assessment app, this tool makes
 //! network requests: only to Slack's file hosts, only when the user presses
 //! Download, and only for links already inside their own export.
 

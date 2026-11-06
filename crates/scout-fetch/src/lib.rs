@@ -1,13 +1,13 @@
-//! DataPack Scout Attachment Downloader.
+//! Working Minds Attachment Downloader.
 //!
 //! A Slack workspace export contains links to shared files, not the files
 //! themselves. This library reads an export, lists the referenced files and
 //! downloads them using the links already in the export.
 //!
-//! It is deliberately separate from the DataPack Scout assessment app, which
+//! It is deliberately separate from the Working Minds assessment app, which
 //! has no network capability. This tool connects only to Slack's file hosts,
 //! enforced for every request and every redirect by [`HostPolicy`]. It never
-//! contacts the DataPack Scout operator. Links are never written to disk or
+//! contacts the Working Minds operator. Links are never written to disk or
 //! shown in full: they carry access tokens.
 
 use serde::Serialize;
@@ -19,9 +19,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-pub const TOOL_NAME: &str = "DataPack Scout Attachment Downloader";
-pub const MANIFEST_NAME: &str = "datapack-scout-attachments.json";
-/// Folder inside the output directory that DataPack Scout recognises.
+pub const TOOL_NAME: &str = "Working Minds Attachment Downloader";
+pub const MANIFEST_NAME: &str = "working-minds-attachments.json";
+/// Folder inside the output directory that Working Minds recognises.
 pub const ATTACHMENTS_DIR: &str = "attachments";
 
 // ------------------------------------------------------------------ policy
@@ -702,7 +702,7 @@ pub fn download(plan: &Plan, opts: &Options, progress: &mut dyn FnMut(&Progress)
         "tool": TOOL_NAME,
         "version": env!("CARGO_PKG_VERSION"),
         "export": plan.export_name,
-        "note": "Attachments downloaded from Slack using the links in this export. Drop this folder onto your DataPack Scout data map to add them.",
+        "note": "Attachments downloaded from Slack using the links in this export. Drop this folder onto your Working Minds data map to add them.",
         "files": entries,
     });
     let _ = fs::write(
@@ -713,8 +713,8 @@ pub fn download(plan: &Plan, opts: &Options, progress: &mut dyn FnMut(&Progress)
         opts.out_dir.join("README.txt"),
         format!(
             "These files were downloaded from Slack by the {TOOL_NAME}, using the links in \"{}\".\n\n\
-             To include them, drop this whole folder onto your DataPack Scout data map (or choose Add data there).\n\
-             Each file sits in a folder named after its Slack file ID, so DataPack Scout can match it to the messages that shared it.\n",
+             To include them, drop this whole folder onto your Working Minds data map (or choose Add data there).\n\
+             Each file sits in a folder named after its Slack file ID, so Working Minds can match it to the messages that shared it.\n",
             plan.export_name
         ),
     );

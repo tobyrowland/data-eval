@@ -51,6 +51,8 @@ button { font: inherit; color: inherit; }
 body.scrolled .topbar { border-bottom-color: var(--line); }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 16px; }
 .brand-mark { width: 30px; height: 30px; }
+.brand-logo { height: 32px; width: auto; display: block; }
+.brand-divider { width: 1px; height: 24px; background: var(--line); margin: 0 4px; }
 .topbar-right { display: flex; align-items: center; gap: 16px; }
 .status-pill {
   display: inline-flex; align-items: center; gap: 8px;

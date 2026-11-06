@@ -1,13 +1,13 @@
 [package]
 name = "scout-cli"
-description = "Command-line driver for the DataPack Scout assessment core"
+description = "Command-line driver for the Working Minds assessment core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "datapack-scout"
+name = "working-minds"
 path = "src/main.rs"
 
 [dependencies]

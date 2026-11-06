@@ -3,21 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DataPack Scout</title>
+  <title>Working Minds</title>
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
-        <rect x="2" y="2" width="60" height="60" rx="15" fill="#14283F"/>
-        <circle cx="32" cy="32" r="19" fill="none" stroke="#7FD1C6" stroke-width="2" stroke-dasharray="3 4" opacity=".7"/>
-        <circle cx="32" cy="32" r="11" fill="#187C75"/>
-        <circle cx="28.5" cy="29.5" r="4" fill="#9FE3D8"/>
-        <circle cx="36" cy="35" r="2.6" fill="#F6F8FB"/>
-        <circle cx="47" cy="20" r="3.4" fill="#E8AA40"/>
-      </svg>
-      <span class="brand-name">DataPack Scout</span>
+      <img class="brand-logo" src="brand-logo.png" alt="Working Minds" width="271" height="32">
     </div>
     <div class="topbar-right">
       <span class="status-pill" title="Everything runs on this computer">
@@ -116,11 +108,11 @@
         <dt>What is sent</dt>
         <dd>Nothing. This app has no network features: no analytics, no crash uploads, no update checks, and no AI services.</dd>
         <dt>What is saved</dt>
-        <dd>Only what you choose to save: your data map, in Documents › DataPack Scout. It contains counts and coverage, not your messages, documents or file paths.</dd>
+        <dd>Only what you choose to save: your data map, in Documents › Working Minds. It contains counts and coverage, not your messages, documents or file paths.</dd>
         <dt>What is remembered</dt>
         <dd>Only the list of files and folders you added, kept in this app's private folder on this computer, so you can reopen your map later. No contents or results are stored. <b>Start fresh</b> or <b>Start again</b> forgets it.</dd>
         <dt>Getting files from Slack</dt>
-        <dd>The optional Attachment Downloader is a separate app. It connects to Slack, and only Slack, to fetch files your export links to. DataPack Scout itself never connects to anything.</dd>
+        <dd>The optional Attachment Downloader is a separate app. It connects to Slack, and only Slack, to fetch files your export links to. Working Minds itself never connects to anything.</dd>
         <dt>Still to come</dt>
         <dd>Operating-system network isolation with a verified status indicator, and the optional encrypted assessment you can choose to email for a commercial review.</dd>
       </dl>
@@ -150,6 +142,10 @@
     <div class="adding-ring" aria-hidden="true"></div>
     <div class="adding-text"><b id="adding-title">Adding</b><span id="adding-detail"></span></div>
     <button class="btn ghost small" id="adding-stop">Stop</button>
+  </div>
+  <div class="source-picker" id="source-picker" hidden>
+    <input type="text" placeholder="Search, or type a source to add" aria-label="Add a source">
+    <div class="picker-list"></div>
   </div>
   <div class="add-menu" id="add-menu" hidden>
     <button id="menu-files"><svg class="i" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/></svg><span><b>Files or ZIP exports…</b><small>For example a Slack export</small></span></button>

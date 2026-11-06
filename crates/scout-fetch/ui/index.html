@@ -3,19 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DataPack Scout Attachment Downloader</title>
+  <title>Working Minds Attachment Downloader</title>
   <link rel="stylesheet" href="app.css">
   <link rel="stylesheet" href="fetch.css">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
-        <rect x="2" y="2" width="60" height="60" rx="15" fill="#14283F"/>
-        <circle cx="32" cy="29" r="13" fill="#E8AA40"/>
-        <path d="M32 21v12m-5-4 5 5 5-5M26 39h12" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      <span class="brand-name">Attachment Downloader <span class="brand-sub">for DataPack Scout</span></span>
+      <img class="brand-logo" src="brand-logo.png" alt="Working Minds" width="271" height="32">
+      <span class="brand-divider" aria-hidden="true"></span>
+      <span class="brand-name">Attachment Downloader</span>
     </div>
     <span class="status-pill net"><span class="status-dot amber"></span>Connects to Slack only</span>
   </header>
@@ -25,7 +22,7 @@
     <section class="screen" id="s-choose" data-active>
       <p class="eyebrow">Get the files shared in Slack</p>
       <h1>Download the attachments your Slack export points to</h1>
-      <p class="lede">A Slack export contains links to shared images and documents, not the files themselves. This tool downloads them from Slack using the links already in your export, so DataPack Scout can include them.</p>
+      <p class="lede">A Slack export contains links to shared images and documents, not the files themselves. This tool downloads them from Slack using the links already in your export, so Working Minds can include them.</p>
       <div class="dropzone compact" id="dropzone" tabindex="0">
         <svg viewBox="0 0 24 24" class="drop-arrow"><path d="M12 4v12m0 0-5-5m5 5 5-5M5 20h14"/></svg>
         <h2 class="drop-title">Drop your Slack export here</h2>
@@ -37,7 +34,7 @@
       </div>
       <div class="trust">
         <div><b>Connects only to Slack.</b> Every download, and every redirect, is checked against Slack's own file servers. Anything else is refused.</div>
-        <div><b>Nothing goes to DataPack Scout.</b> Your files go straight from Slack to a folder on this computer.</div>
+        <div><b>Nothing goes to Working Minds.</b> Your files go straight from Slack to a folder on this computer.</div>
         <div><b>Uses your export's own links.</b> No Slack sign-in or password is needed or stored.</div>
       </div>
     </section>
@@ -95,11 +92,11 @@
       <div class="card next">
         <h3>Next: drop the folder onto your data map</h3>
         <ol>
-          <li>Switch back to <b>DataPack Scout</b>.</li>
+          <li>Switch back to <b>Working Minds</b>.</li>
           <li>Drag the attachments folder onto your data map, or choose <b>Add data</b>. Only the new files are read and your map updates in place.</li>
           <li>The amber "missing" circles turn teal for every file found.</li>
         </ol>
-        <p class="muted small">Closed DataPack Scout? Open it and choose <b>Reopen my map</b>, then drop the folder in.</p>
+        <p class="muted small">Closed Working Minds? Open it and choose <b>Reopen my map</b>, then drop the folder in.</p>
         <div class="actions-row">
           <button class="btn secondary" id="show">Show attachments folder</button>
           <button class="btn ghost" id="again">Download from another export</button>

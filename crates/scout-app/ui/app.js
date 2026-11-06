@@ -1,4 +1,4 @@
-/* DataPack Scout — screen flow and wiring to the Rust core.
+/* Working Minds — screen flow and wiring to the Rust core.
  * Talks only to the app's own commands through Tauri IPC. */
 (function () {
   "use strict";
@@ -224,9 +224,11 @@
   $("stop").onclick = async () => { $("stop").textContent = "Stopping…"; $("stop").disabled = true; await invoke("stop"); };
 
   // ---------------------------------------------------------------- map
-  function showMap(map, banner) {
+  async function showMap(map, banner) {
     lastSaved = null;
     currentMap = map;
+    let plan = null;
+    try { plan = await invoke("get_source_plan"); } catch (_) { /* first run */ }
     show("screen-map");
     window.ScoutMap.render($("map-page"), map, {
       onSave: async () => {
@@ -239,18 +241,19 @@
       onRestart: async () => { await invoke("forget_session"); selections = []; currentMap = null; renderSelection(); show("screen-add"); },
       onAddData: (btn) => addDataMenu(btn),
       onGuide: (kind) => openGuide(kind),
-    }, { banner });
+      onPlan: (p) => invoke("set_source_plan", { plan: p }).catch((e) => toast("Could not save your list: " + e)),
+    }, { banner, plan });
   }
 
   // ---------------------------------------------------------------- guides
-  const TOOL_ICON = `<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="2" y="2" width="60" height="60" rx="15" fill="#14283F"/><circle cx="32" cy="29" r="13" fill="#E8AA40"/><path d="M32 21v12m-5-4 5 5 5-5M26 39h12" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const TOOL_ICON = `<img src="downloader-icon.png" alt="" width="46" height="46">`;
   const SLACK_GUIDE = `
     <p class="eyebrow">How to get these</p>
     <h2>Get the files shared in Slack</h2>
     <p>Slack exports contain <b>links</b> to shared images and documents, not the files themselves. To include them, download them from Slack into a folder on this computer.</p>
-    <div class="guide-tool">${TOOL_ICON}<div><b>DataPack Scout Attachment Downloader</b><span>A separate companion app. It reads your export and downloads the files straight from Slack, using the links already inside it. It connects only to Slack and never sends anything to us.</span></div></div>
+    <div class="guide-tool">${TOOL_ICON}<div><b>Working Minds Attachment Downloader</b><span>A separate companion app. It reads your export and downloads the files straight from Slack, using the links already inside it. It connects only to Slack and never sends anything to us.</span></div></div>
     <button class="btn primary" data-open-download>Get the Attachment Downloader</button>
-    <p class="guide-note">Opens the download page in your web browser. DataPack Scout itself stays offline.</p>
+    <p class="guide-note">Opens the download page in your web browser. Working Minds itself stays offline.</p>
     <ol class="guide-steps" style="margin-top:18px">
       <li><b>Install and open</b> the Attachment Downloader.</li>
       <li><b>Drop in the same Slack export</b> you added here and choose <b>Download from Slack</b>. It saves the files to a folder called “<i>your export</i> attachments”.</li>
@@ -259,7 +262,7 @@
     </ol>
     <div class="guide-callout"><b>Good to know</b><br>
       Exports from Slack's Free plan only include file links from the last 90 days. Files deleted from Slack can't be downloaded, and links stop working if your workspace admin revokes the export's links. On Enterprise plans, an admin can request a Discovery API export, which includes the files themselves.</div>
-    <p class="guide-note"><b>Prefer to do it by hand?</b> Each message's <code class="k">files</code> section in the export has a download link you can open in a browser. Save each file into <code class="k">attachments/&lt;file ID&gt;/</code> so DataPack Scout can match it to its message.</p>`;
+    <p class="guide-note"><b>Prefer to do it by hand?</b> Each message's <code class="k">files</code> section in the export has a download link you can open in a browser. Save each file into <code class="k">attachments/&lt;file ID&gt;/</code> so Working Minds can match it to its message.</p>`;
   const GUIDES = {
     slack_images: SLACK_GUIDE,
     slack_files: SLACK_GUIDE,
@@ -274,8 +277,49 @@
       </ol>
       <div class="guide-callout"><b>Good to know</b><br>This release counts and profiles repository files. Matching pull requests to commits and reading history arrive in a later release, so this item stays amber for now even after you add the code.</div>`,
   };
+  // How to export each kind of source. Kept short; the owner follows the
+  // service's own admin screens. Nothing here is fetched from the internet.
+  const EXPORT_GUIDES = {
+    github: ["Clone each repository with its full history, using GitHub Desktop or <code class=\"k\">git clone</code>. Avoid “Download ZIP”, which drops the history.", "Pull requests and issues aren't part of a clone. An organisation owner can export them as a migration archive."],
+    gitlab: ["Clone each repository with its full history (<code class=\"k\">git clone</code>).", "To include issues and merge requests, export the project from its settings (Export project)."],
+    bitbucket: ["Clone each repository with its full history (<code class=\"k\">git clone</code>).", "Pull requests aren't part of a clone; note which repositories they belong to so they can be exported separately."],
+    jira: ["From an issue search, export the issues (CSV) including comments.", "For everything, a Jira admin can create a site backup in the backup manager."],
+    linear: ["A workspace admin can export issues as CSV from the workspace settings."],
+    asana: ["Export a project as CSV or JSON from its menu, or ask an admin for an organisation export."],
+    trello: ["Export a board as JSON from the board menu (Print, export and share)."],
+    google_drive: ["Use Google Takeout and choose Drive. Docs, Sheets and Slides arrive as Office files.", "Unzip the download or add the ZIP files as they are."],
+    notion: ["A workspace owner can export all content from Settings (Export all workspace content), as Markdown and CSV."],
+    confluence: ["Export each space (HTML or XML) from its space settings, or ask an admin for a site backup."],
+    microsoft365: ["Sync or download the relevant OneDrive or SharePoint folders to this computer, then add the folder."],
+    dropbox: ["Download the relevant folders, or let the Dropbox app sync them, then add the folder."],
+    box: ["Download the relevant folders from Box, then add the folder."],
+    figma: ["Design files are of limited use as training data. If they matter, export them from Figma's File menu."],
+    miro: ["Export boards from the board menu. Like design files, they are usually of limited use as training data."],
+    zendesk: ["An admin can request a data export (JSON or CSV) from the admin centre. Tickets with comments are the valuable part."],
+    intercom: ["An admin can export conversations from the workspace settings (data export)."],
+    salesforce: ["An admin can run the Data Export service from Setup and download the files when it finishes."],
+    hubspot: ["Export records and their activity from each object view, or ask an admin for an account export."],
+    sentry: ["Issue data can be exported from Sentry's organisation settings, or through its API by an admin."],
+    datadog: ["Monitoring data is usually of limited use as training data. If incidents and notes matter, export them from Datadog."],
+    pagerduty: ["Incident history can be exported as CSV from the incidents and analytics pages."],
+    circleci: ["Build history is mostly already visible through bot messages. Exports need an admin and its API."],
+    loom: ["Videos can be downloaded one by one from Loom. Transcripts are often more useful than the video itself."],
+    zoom: ["Cloud recordings and transcripts can be downloaded from the Zoom web portal (Recordings)."],
+    airtable: ["Download each table as CSV from its view menu."],
+    email: ["Export mailboxes as MBOX (Google Takeout for Gmail) or EML, then add the files."],
+    custom: ["Look for an export, download or backup option in the service's admin settings.", "Then add the exported files or folder to your map."],
+  };
+  function exportGuide(id) {
+    const s = ((currentMap && currentMap.source_catalog) || []).find((x) => x.id === id);
+    const steps = EXPORT_GUIDES[id] || EXPORT_GUIDES.custom;
+    const src = ((currentMap && currentMap.sources) || []).find((x) => x.id === id);
+    return `<p class="eyebrow">How to export</p><h2>${esc(s ? s.name : "Your source")}</h2>
+      ${src && src.evidence ? `<div class="guide-callout"><b>Why it's suggested</b><br>${esc(src.evidence)}${src.referenced_from && src.referenced_from.length ? `, in ${esc(src.referenced_from.join(", "))}` : ""}.</div>` : ""}
+      <ol class="guide-steps">${steps.map((x) => `<li>${x}</li>`).join("")}<li><b>Drop the export onto your map</b>, or choose <b>Add data</b>. Only the new material is read.</li></ol>
+      <p class="guide-note">Exports stay on this computer. Working Minds reads them locally and never connects to these services.</p>`;
+  }
   function openGuide(kind) {
-    $("guide-body").innerHTML = GUIDES[kind] || "<h2>No guide yet</h2>";
+    $("guide-body").innerHTML = kind.startsWith("export:") ? exportGuide(kind.slice(7)) : GUIDES[kind] || "<h2>No guide yet</h2>";
     const b = $("guide-body").querySelector("[data-open-download]");
     if (b) b.onclick = () => invoke("open_download_page").catch((e) => toast("Could not open the page: " + e));
     $("guide-panel").setAttribute("aria-hidden", "false");

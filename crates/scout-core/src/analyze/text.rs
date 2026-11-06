@@ -4,7 +4,7 @@
 use super::Outcome;
 use std::io::{self, BufRead, BufReader, Read};
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct TextStats {
     pub bytes: u64,
     pub lines: u64,
@@ -12,6 +12,9 @@ pub struct TextStats {
     pub invalid_utf8_lines: u64,
     /// Lines starting with "From " at a message boundary (MBOX only).
     pub mbox_messages: u64,
+    /// Leading text, up to the language sample limit.
+    pub sample: String,
+    pub sample_truncated: bool,
 }
 
 pub fn stats(r: &mut dyn Read) -> io::Result<TextStats> {
@@ -27,6 +30,11 @@ pub fn stats(r: &mut dyn Read) -> io::Result<TextStats> {
         }
         s.bytes += n as u64;
         s.lines += 1;
+        if s.sample.len() + line.len() <= super::language::MAX_SAMPLE_BYTES {
+            s.sample.push_str(&String::from_utf8_lossy(&line));
+        } else {
+            s.sample_truncated = true;
+        }
         if std::str::from_utf8(&line).is_err() {
             s.invalid_utf8_lines += 1;
         }
@@ -43,7 +51,7 @@ pub fn stats(r: &mut dyn Read) -> io::Result<TextStats> {
 }
 
 pub fn analyze(r: &mut dyn Read, mbox: bool, eml: bool) -> io::Result<Outcome> {
-    let s = stats(r)?;
+    let mut s = stats(r)?;
     let records = if mbox {
         Some(s.mbox_messages)
     } else if eml {
@@ -54,6 +62,7 @@ pub fn analyze(r: &mut dyn Read, mbox: bool, eml: bool) -> io::Result<Outcome> {
     let mut o = Outcome::assessed(records);
     o.text_bytes = s.bytes;
     o.words = s.words;
+    o.sample = Some((std::mem::take(&mut s.sample), s.sample_truncated));
     Ok(o)
 }
 

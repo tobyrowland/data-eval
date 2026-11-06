@@ -1,28 +1,28 @@
-DataPack Scout 0.1.0 (preview)
+Working Minds 0.1.0 (preview)
 ==============================
 
 Understand your company data, privately. Assessment happens on this
 computer. No data is sent to us or to an AI service.
 
 HOW TO USE
-1. Double-click "datapack-scout" (Windows: datapack-scout.exe).
+1. Double-click "working-minds" (Windows: working-minds.exe).
    A window opens.
 2. Drag an export (a ZIP, a folder or a file) into the window and press Enter.
    Repeat for as many exports as you like.
 3. Press Enter on an empty line to start.
 4. Your data map appears in the window and is saved in
-   Documents/DataPack Scout as Your-Data-Map-<date>.txt and .json.
+   Documents/Working Minds as Your-Data-Map-<date>.txt and .json.
 
 FIRST-RUN WARNINGS (this preview is not yet code-signed)
 - Windows: if SmartScreen says "Windows protected your PC", click
   "More info", then "Run anyway".
 - macOS: if it says the app "cannot be opened", right-click (or
-  Control-click) datapack-scout, choose Open, then Open again.
+  Control-click) working-minds, choose Open, then Open again.
   Or run this in Terminal from the unzipped folder:
-      xattr -d com.apple.quarantine datapack-scout
+      xattr -d com.apple.quarantine working-minds
 
 ADVANCED (command line)
-  datapack-scout scan <file-or-folder>... [--exclude <path>] [--json out.json]
+  working-minds scan <file-or-folder>... [--exclude <path>] [--json out.json]
 
 WHAT THIS PREVIEW DOES
 It inventories files, folders and archives (ZIP, TAR, GZIP). It reads CSV,

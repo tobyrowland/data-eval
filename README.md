@@ -1,4 +1,4 @@
-# DataPack Scout
+# Working Minds
 
 A downloadable desktop application that helps a company understand its
 existing data exports and prepare a private assessment for possible AI
@@ -24,11 +24,11 @@ PDF and the encrypted private dossier come in later milestones (see below).
 Preview installers are on the
 [Releases page](https://github.com/tobyrowland/data-eval/releases):
 
-- Windows: `DataPack-Scout-Setup-windows-x64.exe` or `.msi`
-- macOS: `DataPack-Scout-macos-universal.dmg`
+- Windows: `Working-Minds-Setup-windows-x64.exe` or `.msi`
+- macOS: `Working-Minds-macos-universal.dmg`
 - Linux: `.AppImage` or `.deb`
 
-The command-line tool is in the `DataPack-Scout-CLI-*` archives. The preview is
+The command-line tool is in the `Working-Minds-CLI-*` archives. The preview is
 not code-signed yet, so Windows and macOS show a first-run warning.
 
 ## The desktop app
@@ -49,7 +49,28 @@ not code-signed yet, so Windows and macOS show a first-run warning.
      steps.
 
    *Save my data map* writes `.txt` and `.json` copies to
-   `Documents/DataPack Scout`.
+   `Documents/Working Minds`.
+
+### Page layout
+
+1. **The data map** comes first: a one-line summary and four key figures
+   above it.
+2. **Next steps** is one ranked list:
+   - files the Slack export links to but doesn't contain
+   - other systems the data refers to
+   - sources the owner added themselves
+   - remaining preparation steps
+
+   Systems are found from links in messages and documents (GitHub, Jira,
+   Google Drive, Notion, Confluence and so on), apps installed in Slack, and
+   messages from those apps' bots. Each row shows its evidence, for example
+   "507 links to 297 distinct tickets · app installed in Slack". The owner can
+   remove a suggestion, restore it, or add a source from the catalogue or
+   their own. Their edits are kept on this computer and included in the saved
+   map. Links themselves never leave the private inventory; the map carries
+   only service names and counts.
+3. **Analysis:** collections, coverage, file formats and languages tables,
+   plus activity over time.
 
 ### Making the data more complete
 
@@ -77,8 +98,8 @@ Attachment Downloader reads the export and downloads those files using the
 links already inside it, into `<export> attachments/attachments/<FILE_ID>/`.
 It also writes a manifest and a README; neither contains any links.
 
-- **The only DataPack Scout tool that connects to the internet.** It is a
-  separate app, so DataPack Scout itself keeps no network capability.
+- **The only Working Minds tool that connects to the internet.** It is a
+  separate app, so Working Minds itself keeps no network capability.
 - **Slack only.** Every request and every redirect must be HTTPS to a Slack
   file host (`slack.com`, `*.slack.com`, `*.slack-edge.com`). Anything else is
   refused. Links carry access tokens, so they are never logged, displayed in
@@ -89,7 +110,7 @@ It also writes a manifest and a README; neither contains any links.
 - **Practical:** it resumes by skipping files already saved, has a Stop
   button, caps each file at 4 GB and runs 4 parallel downloads.
 - **Tests:** `crates/scout-fetch/tests/download.rs` runs the whole flow against
-  a local server. It checks that DataPack Scout credits the downloaded files
+  a local server. It checks that Working Minds credits the downloaded files
   back to the export.
 
 The window can only call the app's own commands. No HTTP, shell or filesystem
@@ -113,7 +134,7 @@ The `release` workflow builds and publishes them on every push to `main` or a
 ## Try it from source
 
 ```bash
-cargo run --release --bin datapack-scout -- scan ~/Downloads/slack-export.zip ~/Exports/Drive --json data-map.json
+cargo run --release --bin working-minds -- scan ~/Downloads/slack-export.zip ~/Exports/Drive --json data-map.json
 ```
 
 `--exclude <selection>/<path>` leaves out a sub-folder or archive member. It
@@ -140,6 +161,17 @@ is counted as *Excluded* and its contents are not read.
   detection), JSON, JSON Lines, plain text, Markdown, HTML, XML, EML and MBOX
   (message counts). Exact duplicates are found with local SHA-256 hashes,
   which never leave the private inventory.
+- **Language mix.** The apparent language of readable text is measured in
+  words. That covers Slack messages written by people (bot and integration
+  messages are left out), plus text, Markdown, HTML and email bodies (up to
+  256 KB sampled per document). The result is a table in the app and the CLI,
+  with a breakdown per collection.
+  - **Method:** `whatlang`'s trigram detector, run locally. Paragraphs of 60+
+    letters take the top language; 20–59 letters need a confident result;
+    anything shorter is reported as "too short to tell", not guessed. Channel
+    names are never used as language labels.
+  - **Not yet read:** PDF and Office documents, which are listed as not yet
+    readable.
 - **Slack export recogniser.** Message records split into participant, bot
   and administrative records, plus posting accounts, threads and replies with
   missing parents. It also counts file references, images, visibility,

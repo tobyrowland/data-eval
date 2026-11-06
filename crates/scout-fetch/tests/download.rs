@@ -195,7 +195,7 @@ fn downloads_only_what_slack_serves_and_matches_back() {
     assert_eq!(again.progress.already_present, 2);
     assert_eq!(again.progress.downloaded, 0);
 
-    // DataPack Scout credits the downloaded files to the export's references.
+    // Working Minds credits the downloaded files to the export's references.
     let inv = scout_core::scan(
         &[exp.clone(), out.clone()],
         scout_core::ScanOptions::default(),

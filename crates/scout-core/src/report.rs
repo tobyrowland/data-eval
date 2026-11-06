@@ -4,13 +4,15 @@
 //! and template sentences. It never carries local paths, content hashes,
 //! message text, channel names, account IDs or URLs (spec §8).
 
+use crate::analyze::language::{self, LanguageRow, LanguageTally};
 use crate::analyze::slack::{civil_from_days, SlackInventory};
+use crate::analyze::sources::{Service, SourceTally, CATALOG};
 use crate::model::{empty_status_counts, Format, Reason, SourceKind, Status};
 use crate::scan::Inventory;
 use crate::{APP_NAME, APP_VERSION, RULESET_VERSION};
 use rand::RngCore;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Serialize)]
@@ -32,6 +34,11 @@ pub struct DataMap {
     /// Content-derived activity per calendar month (YYYY-MM), all collections.
     pub activity: BTreeMap<String, u64>,
     pub stopped_by_user: bool,
+    pub languages: LanguageSummary,
+    /// Systems this data comes from or refers to, with the evidence for each.
+    pub sources: Vec<SourceEntry>,
+    /// Every service the owner can pick from when adding a source.
+    pub source_catalog: &'static [Service],
     pub privacy: Privacy,
 }
 
@@ -103,6 +110,59 @@ pub struct FormatSlice {
     pub examined: u64,
 }
 
+/// One data source: already in the map, or referenced by data that is.
+#[derive(Debug, Serialize)]
+pub struct SourceEntry {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub category: &'static str,
+    /// Some of this source's data is already part of the assessment.
+    pub in_selection: bool,
+    /// Collections that are this source (for sources already in the map).
+    pub collections: Vec<String>,
+    pub links: u64,
+    pub distinct_targets: u64,
+    pub target_noun: &'static str,
+    pub app_installed: bool,
+    pub bot_messages: u64,
+    /// Collections whose content links to or mentions this source.
+    pub referenced_from: Vec<String>,
+    /// One plain-English line summarising the evidence.
+    pub evidence: String,
+}
+
+/// Apparent language mix of the readable text, with its method and limits.
+#[derive(Debug, Serialize)]
+pub struct LanguageSummary {
+    pub method: &'static str,
+    /// Words examined for language, including undetermined ones.
+    pub words_examined: u64,
+    pub undetermined_words: u64,
+    /// Share of all examined words that could not be classified.
+    pub undetermined_percent: f64,
+    /// Share of all examined words that are English (same basis as `rows`).
+    /// None when too little text could be classified to say.
+    pub english_percent: Option<f64>,
+    pub rows: Vec<LanguageRow>,
+    pub by_collection: Vec<CollectionLanguages>,
+    /// Documents whose text was sampled from the start rather than read in full.
+    pub sampled_documents: u64,
+    /// Documents with text this release cannot read yet (PDF, Office, OpenDocument).
+    pub unreadable_documents: u64,
+    /// Media and binary files, which carry no readable text.
+    pub non_text_files: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CollectionLanguages {
+    pub label: String,
+    /// "messages" for Slack conversations, "documents" otherwise.
+    pub basis: &'static str,
+    pub words_examined: u64,
+    pub undetermined_words: u64,
+    pub rows: Vec<LanguageRow>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Relationship {
     /// Collection label the references come from.
@@ -158,7 +218,7 @@ pub fn new_assessment_id() -> String {
     let mut b = [0u8; 6];
     rand::rngs::OsRng.fill_bytes(&mut b);
     let hex: String = b.iter().map(|x| format!("{x:02X}")).collect();
-    format!("DPS-{}-{}-{}", &hex[0..4], &hex[4..8], &hex[8..12])
+    format!("WM-{}-{}-{}", &hex[0..4], &hex[4..8], &hex[8..12])
 }
 
 pub fn build_data_map(inv: &Inventory) -> DataMap {
@@ -326,6 +386,29 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         summary.push(format!("We examined the contents of {p}% of the files."));
     }
     let relationships = relationships(inv, &collections);
+    let languages = language_summary(inv);
+    if let Some(en) = languages.english_percent {
+        let others: Vec<String> = languages
+            .rows
+            .iter()
+            .filter(|r| r.code != "eng")
+            .take(2)
+            .map(|r| format!("{} ({}%)", r.language, r.share_percent))
+            .collect();
+        summary.push(if others.is_empty() {
+            format!("{en}% of the readable text is in English; the rest is too short to tell.")
+        } else if en >= 50.0 {
+            format!(
+                "About {en}% of the readable text is in English; the largest other languages are {}.",
+                others.join(" and ")
+            )
+        } else {
+            format!(
+                "Only {en}% of the readable text is in English; the largest other languages are {}.",
+                others.join(" and ")
+            )
+        });
+    }
     let all_slack: Vec<SlackInventory> = collections.iter().flat_map(|c| c.slack.clone()).collect();
     let refs: u64 = all_slack.iter().map(|s| s.distinct_file_references).sum();
     let images: u64 = all_slack.iter().map(|s| s.referenced_image_files).sum();
@@ -381,7 +464,7 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         prep.push((
             missing_images,
             format!(
-                "Add the original attachments: {} referenced by conversations {} no local copy. The DataPack Scout Attachment Downloader can fetch them from Slack for you.",
+                "Add the original attachments: {} referenced by conversations {} no local copy. The Working Minds Attachment Downloader can fetch them from Slack for you.",
                 plural(missing_images, "image", "images"),
                 if missing_images == 1 { "has" } else { "have" }
             ),
@@ -466,10 +549,171 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         relationships,
         activity,
         stopped_by_user: inv.cancelled,
+        languages,
+        sources: source_entries(inv),
+        source_catalog: CATALOG,
         privacy: Privacy {
             statement: "Everything was assessed on this computer. No files or contents were sent to us or to an AI service.",
             network: "Local assessment · Nothing is uploaded",
         },
+    }
+}
+
+fn source_entries(inv: &Inventory) -> Vec<SourceEntry> {
+    let mut all = SourceTally::default();
+    for c in &inv.collections {
+        let i = c.id as usize;
+        // The Slack recogniser does not know its collection number.
+        let mut slack = inv.slack[i].sources.clone();
+        for s in slack.by_service.values_mut() {
+            s.collections = [c.id].into_iter().collect();
+        }
+        all.merge(&slack);
+        all.merge(&inv.text[i].sources);
+    }
+    // Sources whose data is already in the assessment.
+    let mut present: BTreeMap<&'static str, BTreeSet<String>> = BTreeMap::new();
+    for c in &inv.collections {
+        if c.source_kind == SourceKind::SlackExport {
+            present.entry("slack").or_default().insert(c.label.clone());
+        }
+    }
+    for it in &inv.items {
+        if matches!(it.format, Format::Mbox | Format::Eml) && it.status != Status::Excluded {
+            present
+                .entry("email")
+                .or_default()
+                .insert(inv.collections[it.collection as usize].label.clone());
+        }
+    }
+    let label = |c: u32| inv.collections[c as usize].label.clone();
+    let mut ids: BTreeSet<&'static str> = all.by_service.keys().copied().collect();
+    ids.extend(present.keys().copied());
+    let mut out: Vec<(u64, SourceEntry)> = ids
+        .into_iter()
+        .filter_map(|id| {
+            let svc = crate::analyze::sources::service(id)?;
+            let st = all.by_service.get(id).cloned().unwrap_or_default();
+            let in_selection = present.contains_key(id);
+            let distinct = st.targets.len() as u64;
+            let mut parts = Vec::new();
+            if st.links > 0 {
+                let noun = if distinct == 1 {
+                    svc.target_noun.trim_end_matches('s')
+                } else {
+                    svc.target_noun
+                };
+                parts.push(format!(
+                    "{} to {} distinct {}",
+                    plural(st.links, "link", "links"),
+                    group(distinct),
+                    noun
+                ));
+            }
+            if st.app_installed {
+                parts.push("app installed in Slack".to_string());
+            }
+            if st.bot_messages > 0 {
+                parts.push(format!(
+                    "{} from its bot",
+                    plural(st.bot_messages, "message", "messages")
+                ));
+            }
+            let collections: Vec<String> = present
+                .get(id)
+                .map(|s| s.iter().cloned().collect())
+                .unwrap_or_default();
+            let evidence = if parts.is_empty() {
+                format!("In your map: {}", collections.join(", "))
+            } else {
+                let mut e = parts.join(" · ");
+                e[..1].make_ascii_uppercase();
+                e
+            };
+            let score = if in_selection {
+                u64::MAX
+            } else {
+                distinct * 3
+                    + st.links
+                    + st.bot_messages / 2
+                    + if st.app_installed { 50 } else { 0 }
+            };
+            Some((
+                score,
+                SourceEntry {
+                    id,
+                    name: svc.name,
+                    category: svc.category,
+                    in_selection,
+                    collections,
+                    links: st.links,
+                    distinct_targets: distinct,
+                    target_noun: svc.target_noun,
+                    app_installed: st.app_installed,
+                    bot_messages: st.bot_messages,
+                    referenced_from: st.collections.iter().map(|&c| label(c)).collect(),
+                    evidence,
+                },
+            ))
+        })
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.cmp(b.1.name)));
+    out.into_iter().map(|e| e.1).collect()
+}
+
+fn language_summary(inv: &Inventory) -> LanguageSummary {
+    let mut all = LanguageTally::default();
+    let mut by_collection = Vec::new();
+    for c in &inv.collections {
+        let i = c.id as usize;
+        let slack = &inv.slack[i].languages;
+        let docs = &inv.text[i].languages;
+        let (tally, basis) = if slack.determined_words() + slack.undetermined_words > 0 {
+            let mut t = slack.clone();
+            t.merge(docs);
+            (t, "messages")
+        } else {
+            (docs.clone(), "documents")
+        };
+        all.merge(&tally);
+        let examined = tally.determined_words() + tally.undetermined_words;
+        if examined > 0 {
+            by_collection.push(CollectionLanguages {
+                label: c.label.clone(),
+                basis,
+                words_examined: examined,
+                undetermined_words: tally.undetermined_words,
+                rows: tally.rows(),
+            });
+        }
+    }
+    let examined = all.determined_words() + all.undetermined_words;
+    let classified = all.determined_words();
+    let english = all.by_code.get("eng").map_or(0, |v| v.0);
+    let mut unreadable = 0;
+    let mut non_text = 0;
+    for it in &inv.items {
+        if it.status == Status::Excluded {
+            continue;
+        }
+        match it.format {
+            Format::Pdf | Format::OfficeDocument | Format::OpenDocument => unreadable += 1,
+            Format::Image | Format::Audio | Format::Video | Format::Executable => non_text += 1,
+            _ => {}
+        }
+    }
+    LanguageSummary {
+        method: language::METHOD,
+        words_examined: examined,
+        undetermined_words: all.undetermined_words,
+        undetermined_percent: language::pct(all.undetermined_words, examined),
+        // Below this, a percentage would suggest more certainty than there is.
+        english_percent: (classified >= 50).then(|| language::pct(english, examined)),
+        rows: all.rows(),
+        by_collection,
+        sampled_documents: all.sampled_documents,
+        unreadable_documents: unreadable,
+        non_text_files: non_text,
     }
 }
 
@@ -618,6 +862,35 @@ pub fn render_text(m: &DataMap) -> String {
         group(m.totals.expanded_bytes),
         group(m.totals.exact_duplicate_files)
     );
+    let l = &m.languages;
+    if l.words_examined > 0 {
+        let _ = writeln!(s, "\nLanguages (words of readable text)");
+        for r in l.rows.iter().take(8) {
+            let _ = writeln!(
+                s,
+                "  {:<22} {:>12}  {:>5.1}%",
+                r.language,
+                group(r.words),
+                r.share_percent
+            );
+        }
+        if l.undetermined_words > 0 {
+            let _ = writeln!(
+                s,
+                "  {:<22} {:>12}  {:>5.1}%",
+                "Too short to tell",
+                group(l.undetermined_words),
+                l.undetermined_percent
+            );
+        }
+        if l.unreadable_documents > 0 {
+            let _ = writeln!(
+                s,
+                "  Not yet readable: {} PDF and Office documents",
+                group(l.unreadable_documents)
+            );
+        }
+    }
     if !m.preparation_priorities.is_empty() {
         let _ = writeln!(s, "\nUseful next steps");
         for (i, p) in m.preparation_priorities.iter().enumerate() {

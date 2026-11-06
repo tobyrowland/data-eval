@@ -1,7 +1,7 @@
-//! `datapack-scout` — command-line driver for the local assessment core.
+//! `working-minds` — command-line driver for the local assessment core.
 //!
 //! Usage:
-//!   datapack-scout scan <path>... [--exclude <path>]... [--json <file>]
+//!   working-minds scan <path>... [--exclude <path>]... [--json <file>]
 //!
 //! Prints the owner's data map to the terminal and optionally writes it as
 //! JSON. Nothing is sent anywhere; the binary has no network capability.
@@ -13,10 +13,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-DataPack Scout — understand your company data, privately.
+Working Minds — understand your company data, privately.
 
 Usage:
-  datapack-scout scan <file-or-folder>... [--exclude <path>]... [--json <out.json>]
+  working-minds scan <file-or-folder>... [--exclude <path>]... [--json <out.json>]
 
 Options:
   --exclude <path>   Leave out a path, relative to a selection (e.g. export.zip/random)
@@ -86,7 +86,7 @@ fn main() -> ExitCode {
 
 /// Guided mode for people who open the app by double-clicking it.
 fn interactive() -> ExitCode {
-    println!("DataPack Scout — understand your company data, privately.");
+    println!("Working Minds — understand your company data, privately.");
     println!("Assessment happens on this computer. No data is sent to us or to an AI service.\n");
     println!("Drag a file, folder or ZIP export into this window and press Enter.");
     println!("Add as many as you like. Press Enter on an empty line to start.\n");
@@ -188,7 +188,7 @@ fn output_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     let docs = home.join("Documents");
-    if docs.is_dir() { docs } else { home }.join("DataPack Scout")
+    if docs.is_dir() { docs } else { home }.join("Working Minds")
 }
 
 fn today() -> String {

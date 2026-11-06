@@ -1,6 +1,6 @@
 [package]
 name = "scout-core"
-description = "DataPack Scout local assessment core (no network capability)"
+description = "Working Minds local assessment core (no network capability)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,6 +15,7 @@ tar.workspace = true
 flate2.workspace = true
 rand.workspace = true
 regex.workspace = true
+whatlang = "0.18.0"
 
 [dev-dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }

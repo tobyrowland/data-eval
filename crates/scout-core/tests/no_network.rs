@@ -94,7 +94,7 @@ fn sources_use_no_network_apis() {
             if p.is_dir() {
                 // The Attachment Downloader (scout-fetch) is the one crate whose
                 // purpose is downloading, from Slack only. It is a separate app;
-                // scripts/check-desktop-deps.sh keeps it out of DataPack Scout.
+                // scripts/check-desktop-deps.sh keeps it out of Working Minds.
                 if p.file_name()
                     .is_some_and(|n| n != "target" && n != "scout-fetch")
                 {
