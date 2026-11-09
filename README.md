@@ -83,6 +83,20 @@ not code-signed yet, so Windows shows a first-run warning.
    which can be undone. A progress bar shows how many steps are done.
    Takeout archives and repositories get readable names, such as "Google
    Takeout · Drive, Mail · part 3-001" and "acme/core (Git repository)".
+
+   **Each step opens into its items and their files** (to-do → item →
+   files). "N items in your map" lists the things the owner added that
+   *contain* the step's data and those that *link to* it, with file counts,
+   sizes and "links in N files". *Files* opens a folder tree of the item;
+   for linking items it starts with the files that carry the links, most
+   first. The owner can **remove a whole item** (also from the "Already in
+   your map" chips) or **remove files and folders inside an item**. Both are
+   undoable (*Put back*). A step stays in the list unless the item it rests
+   on is removed. Removing never touches files on disk; it only changes the
+   assessment and the data pack. Only the affected items are read again, and
+   overlapping Slack exports are re-counted so every message still counts
+   once. Removals are remembered with the session. File names and paths are
+   shown only on this screen and never go into the saved map.
 3. **Analysis:** collections, coverage, file formats and languages tables,
    plus activity over time.
 

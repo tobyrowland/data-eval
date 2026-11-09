@@ -240,6 +240,26 @@ impl SlackRecogniser {
             .collect()
     }
 
+    /// Collections, by number, whose earlier messages this export skipped
+    /// as already counted.
+    pub fn overlaps_with(&self) -> BTreeSet<u32> {
+        self.exports
+            .values()
+            .flat_map(|s| s.overlap.keys().copied())
+            .collect()
+    }
+
+    /// Follows a re-numbering of collections (after some were removed).
+    pub fn renumber_collections(&mut self, map: &HashMap<u32, u32>) {
+        for st in self.exports.values_mut() {
+            st.overlap = std::mem::take(&mut st.overlap)
+                .into_iter()
+                .filter_map(|(k, v)| map.get(&k).map(|&n| (n, v)))
+                .collect();
+        }
+        self.sources.renumber_collections(map);
+    }
+
     /// Slack file IDs referenced by recognised exports, split into images and
     /// other files. Local only: used to match attachments added later.
     pub fn referenced_files(&self) -> (HashSet<String>, HashSet<String>) {

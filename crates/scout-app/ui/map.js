@@ -614,7 +614,7 @@
     root.querySelector('[data-act="pack"]').onclick = handlers.onPack;
     root.querySelectorAll('[data-act="adddata"]').forEach((b) => (b.onclick = () => handlers.onAddData(b)));
     const steps = root.querySelector("#next-steps");
-    const redraw = () => renderNextSteps(steps, map, plan, handlers, redraw);
+    const redraw = () => renderNextSteps(steps, map, plan, handlers, redraw, extra || {});
     root.querySelector('[data-act="addsource"]').onclick = (e) => openSourcePicker(e.currentTarget, map, plan, () => { handlers.onPlan(plan); redraw(); });
     redraw();
   }
@@ -631,7 +631,10 @@
   const catalogName = (map, id) => ((map.source_catalog || []).find((s) => s.id === id) || {}).name || id;
   const displayOf = (map, label) => ((map.collections || []).find((c) => c.label === label) || {}).display_label || label;
 
-  function renderNextSteps(host, map, plan, handlers, redraw) {
+  // Steps whose items panel is open, kept across redraws.
+  const openSteps = new Set();
+
+  function renderNextSteps(host, map, plan, handlers, redraw, extra) {
     const removed = new Set(plan.removed);
     const doneByHand = new Set(plan.done);
     const sources = map.sources || [];
@@ -654,7 +657,9 @@
       const complete = got >= total;
       const manual = !complete && doneByHand.has(key);
       const several = sf.exports.length > 1;
+      const attach = [...new Set(rels.filter((r) => r.kind === "slack_images" || r.kind === "slack_files").flatMap((r) => r.found_in || []))];
       items.push({
+        groups: [{ role: "contains", labels: [...new Set([...sf.exports, ...attach])] }],
         key, done: complete || manual, manual,
         title: complete ? "Files shared in Slack: all in your map" : manual ? "Files shared in Slack: marked as done" : "Get the files shared in Slack",
         tag: "Slack",
@@ -693,12 +698,14 @@
         } else if (s.id === "google_drive" && s.links) {
           note = "Takeout names files by title rather than by the IDs in links, so we can't check which linked documents it includes.";
         }
-        items.push({ key: s.id, done: true, title: `${s.name}: in your map`, tag: s.category, evidence: found, sub: s.links ? linkLine : null, note,
+        items.push({ groups: [{ role: "contains", labels: s.collections, service: s.id }, { role: "links", labels: (s.referenced_from || []).filter((l) => !s.collections.includes(l)), service: s.id }],
+          key: s.id, done: true, title: `${s.name}: in your map`, tag: s.category, evidence: found, sub: s.links ? linkLine : null, note,
           stat: s.links || null, statNoun: s.links === 1 ? "link" : "links", from: [], actions: [] });
         return;
       }
       const manual = doneByHand.has(s.id);
       items.push({
+        groups: [{ role: "links", labels: s.referenced_from || [], service: s.id }],
         key: s.id, done: manual, manual,
         title: manual ? `${s.name}: marked as done` : `Add your ${s.name} data`, tag: s.category,
         evidence: s.evidence, from: s.referenced_from,
@@ -728,7 +735,7 @@
     const codeShown = items.some((i) => ["github", "gitlab", "bitbucket"].includes(i.key));
     rels.filter((r) => r.kind === "code_reviews" && !codeShown).forEach((r) => {
       const key = "code:" + r.from, manual = doneByHand.has(key);
-      items.push({ key, done: manual, manual, title: manual ? "Code behind pull requests: marked as done" : "Add the code behind linked pull requests", tag: "Code",
+      items.push({ groups: [{ role: "links", labels: [r.from] }], key, done: manual, manual, title: manual ? "Code behind pull requests: marked as done" : "Add the code behind linked pull requests", tag: "Code",
         evidence: r.explanation, from: [r.from], stat: r.count, statNoun: "pull requests",
         actions: manual ? [["Undo", undoDone(key), "ghost"]] : [["How to get these", () => handlers.onGuide("code_reviews")], ["Mark as done", markDone(key), "ghost"]] });
     });
@@ -749,13 +756,47 @@
           ${it.from && it.from.length ? `<div class="step-from">Referenced in ${esc(names(it.from))}</div>` : ""}
           ${it.note ? `<div class="step-note">${esc(it.note)}</div>` : ""}
           ${it.progress != null && !it.done && it.progress > 0 ? `<div class="step-progress"><span style="width:${it.progress}%"></span></div>` : ""}
+          ${itemToggle(it)}
         </div>
         ${it.stat ? `<div class="step-stat"><strong>${num(it.stat)}</strong><span>${esc(it.statNoun)}</span></div>` : `<div></div>`}
         <div class="step-actions">${it.actions.map((a, k) => `<button class="btn ${a[2] || "secondary"} small" data-step="${esc(it.key)}" data-k="${k}">${esc(a[0])}</button>`).join("")}</div>
+        ${openSteps.has(it.key) ? itemPanel(it) : ""}
       </div>`;
+    const colOf = (label) => (map.collections || []).find((c) => c.label === label);
+    const itemLabels = (it) => [...new Set((it.groups || []).flatMap((g) => g.labels || []))].filter(colOf);
+    function itemToggle(it) {
+      const n = itemLabels(it).length;
+      const open = openSteps.has(it.key);
+      return `<button class="items-toggle" data-toggle="${esc(it.key)}" aria-expanded="${open}">${open ? "▾" : "▸"} ${n ? `${num(n)} ${n === 1 ? "item" : "items"} in your map` : "No items in your map yet"}</button>`;
+    }
+    function itemPanel(it) {
+      const groups = (it.groups || []).map((g) => ({ ...g, labels: (g.labels || []).filter(colOf) })).filter((g) => g.labels.length);
+      if (!groups.length) {
+        return `<div class="step-panel"><p class="muted small">Nothing in your map belongs to this step yet. Add its export with “Add data” and it will show here.</p></div>`;
+      }
+      const head = { contains: "Contains this data", links: "Links to it" };
+      return `<div class="step-panel">${groups.map((g) => `<div class="si-group"><div class="si-head">${head[g.role]}</div>${g.labels.map((l) => itemRow(l, g)).join("")}</div>`).join("")}</div>`;
+    }
+    function itemRow(label, g) {
+      const c = colOf(label);
+      const info = kindInfo(c);
+      const linkFiles = g.service ? ((extra.linkCounts || {})[label] || {})[g.service] : 0;
+      const left = (c.by_status && c.by_status.excluded) || 0;
+      const meta = [`${num(c.logical_files)} ${c.logical_files === 1 ? "file" : "files"}`, bytes(c.expanded_bytes)];
+      if (linkFiles) meta.push(`links in ${num(linkFiles)} ${linkFiles === 1 ? "file" : "files"}`);
+      if (left) meta.push(`${num(left)} left out`);
+      return `<div class="si-item" data-label="${esc(label)}" data-service="${esc(g.role === "links" ? g.service || "" : "")}">
+        <div class="si-line">
+          <span class="tbl-badge" style="background:${info.color}">${esc(info.badge)}</span>
+          <span class="si-name"><b title="${esc(label)}">${esc(trunc(c.display_label || c.label, 60))}</b><span class="si-meta">${esc(info.kind)} · ${meta.map(esc).join(" · ")}</span></span>
+          <span class="si-actions"><button class="btn ghost small" data-files>Files ▸</button><button class="btn ghost small danger" data-remove-item title="Takes it out of this assessment and the data pack. Your file is not deleted.">Remove item</button></span>
+        </div>
+        <div class="si-tree" hidden></div>
+      </div>`;
+    }
     const removedItems = plan.removed.map((id) => sources.find((s) => s.id === id)).filter((s) => s && !s.in_selection);
     host.innerHTML = `
-      <div class="in-map"><span class="muted">Already in your map</span>${map.collections.map((c) => `<span class="chip" title="${esc(c.label)}"><i style="background:${kindInfo(c).color}"></i>${esc(trunc(c.display_label || c.label, 40))}</span>`).join("")}</div>
+      <div class="in-map"><span class="muted">Already in your map</span>${map.collections.map((c) => `<span class="chip" title="${esc(c.label)}"><i style="background:${kindInfo(c).color}"></i>${esc(trunc(c.display_label || c.label, 40))}<button class="chip-x" data-chip-remove="${esc(c.label)}" aria-label="Remove ${esc(c.display_label || c.label)} from this assessment" title="Remove from this assessment">×</button></span>`).join("")}</div>
       <div class="card steps-card">
         ${total ? `<div class="steps-progress ${open.length ? "" : "all"}">
           <div class="sp-text"><strong>${num(done.length)} of ${num(total)} done</strong><span>${open.length ? `${num(open.length)} still to add` : "Everything your data points to is accounted for"}</span></div>
@@ -765,7 +806,8 @@
         ${!total ? `<div class="step empty"><div class="step-main"><div class="step-title">Nothing obvious to add</div><div class="step-evidence">Your data doesn't link to other systems we recognise. Use “Add a source” for anything we missed.</div></div></div>` : ""}
         ${other.length ? `<div class="step-other"><b>Also worth doing</b><ul>${other.map((o) => `<li>${esc(o)}</li>`).join("")}</ul></div>` : ""}
       </div>
-      ${removedItems.length ? `<div class="removed-line">${num(removedItems.length)} removed: ${removedItems.map((s) => `<button class="link-btn" data-restore="${esc(s.id)}">${esc(s.name)} ↺</button>`).join(" ")}</div>` : ""}`;
+      ${removedItems.length ? `<div class="removed-line">${num(removedItems.length)} removed: ${removedItems.map((s) => `<button class="link-btn" data-restore="${esc(s.id)}">${esc(s.name)} ↺</button>`).join(" ")}</div>` : ""}
+      ${(extra.removedItems || []).length ? `<div class="removed-line">Taken out of this assessment: ${extra.removedItems.map((r) => `<button class="link-btn" data-restore-item="${esc(r.path)}" title="Put back">${esc(r.name)} ↺</button>`).join(" ")}</div>` : ""}`;
     host.querySelectorAll("[data-step]").forEach((b) => {
       const it = items.find((x) => x.key === b.dataset.step);
       b.onclick = () => it.actions[+b.dataset.k][1]();
@@ -774,6 +816,105 @@
       plan.removed = plan.removed.filter((id) => id !== b.dataset.restore);
       save();
     }));
+    host.querySelectorAll("[data-toggle]").forEach((b) => (b.onclick = () => {
+      const k = b.dataset.toggle;
+      if (openSteps.has(k)) openSteps.delete(k); else openSteps.add(k);
+      redraw();
+    }));
+    const F = handlers.files;
+    if (!F) return;
+    const nameOf = (label) => { const c = colOf(label); return c ? c.display_label || c.label : label; };
+    host.querySelectorAll("[data-chip-remove]").forEach((b) => confirmClick(b, "Remove?", () => F.removeItem(b.dataset.chipRemove, nameOf(b.dataset.chipRemove))));
+    host.querySelectorAll("[data-restore-item]").forEach((b) => (b.onclick = () => F.restoreItem(b.dataset.restoreItem, b.textContent.replace(" ↺", ""))));
+    host.querySelectorAll(".si-item").forEach((row) => {
+      const label = row.dataset.label;
+      const service = row.dataset.service || null;
+      confirmClick(row.querySelector("[data-remove-item]"), "Confirm: remove item", () => F.removeItem(label, nameOf(label)));
+      const tree = row.querySelector(".si-tree");
+      const btn = row.querySelector("[data-files]");
+      btn.onclick = async () => {
+        if (!tree.hidden) { tree.hidden = true; btn.textContent = "Files ▸"; return; }
+        tree.hidden = false; btn.textContent = "Files ▾";
+        if (service) await showLinking(); else await showTree();
+      };
+      async function showTree() {
+        tree.innerHTML = `<div class="muted small">Loading…</div>`;
+        try {
+          const entries = await F.list(label, null, service);
+          tree.innerHTML = (service ? `<div class="ft-switch"><button class="link-btn" data-linking>Show only files with links</button></div>` : "") + `<ul class="ft">${entries.map(entryRow).join("")}</ul>`;
+          bindTree(tree);
+          const sw = tree.querySelector("[data-linking]");
+          if (sw) sw.onclick = showLinking;
+        } catch (e) { tree.innerHTML = `<div class="muted small">Could not list files: ${esc(String(e))}</div>`; }
+      }
+      async function showLinking() {
+        tree.innerHTML = `<div class="muted small">Loading…</div>`;
+        try {
+          const entries = await F.linking(label, service);
+          const svc = catalogName(map, service);
+          tree.innerHTML = `<div class="ft-switch"><span class="muted small">Files with links to ${esc(svc)}, most first</span><button class="link-btn" data-all>Show all files</button></div>
+            <ul class="ft">${entries.length ? entries.map((e) => entryRow(e, true)).join("") : `<li class="muted small">None of its files link to ${esc(svc)}.</li>`}</ul>`;
+          bindTree(tree);
+          tree.querySelector("[data-all]").onclick = showTree;
+        } catch (e) { tree.innerHTML = `<div class="muted small">Could not list files: ${esc(String(e))}</div>`; }
+      }
+      function entryRow(e, flat) {
+        const out = e.excluded_files > 0 && e.excluded_files >= e.files;
+        const name = flat ? e.path.split("/").slice(1).join(" / ") : e.name;
+        const meta = [e.folder ? `${num(e.files)} ${e.files === 1 ? "file" : "files"}` : e.format, bytes(e.bytes)];
+        if (e.links) meta.push(`${num(e.links)} ${e.links === 1 ? "link" : "links"}`);
+        if (e.folder && e.excluded_files && !out) meta.push(`${num(e.excluded_files)} left out`);
+        const action = e.excluded_here ? `<button class="link-btn" data-restore-path="${esc(e.path)}">Put back</button>`
+          : out ? `<span class="muted small">left out</span>`
+          : `<button class="link-btn danger" data-exclude-path="${esc(e.path)}">Remove</button>`;
+        return `<li class="ft-row ${out ? "out" : ""}" data-path="${esc(e.path)}">
+          <div class="ft-line">${e.folder && !flat ? `<button class="ft-twist" aria-expanded="false" aria-label="Open ${esc(e.name)}">▸</button>` : `<span class="ft-dot"></span>`}
+            <span class="ft-name" title="${esc(e.path)}">${esc(name)}</span><span class="ft-meta">${meta.filter(Boolean).map(esc).join(" · ")}</span>${action}</div>
+          ${e.folder && !flat ? `<ul class="ft" hidden></ul>` : ""}
+        </li>`;
+      }
+      function bindTree(el) {
+        el.querySelectorAll(":scope .ft-twist:not([data-bound])").forEach((t) => {
+          t.dataset.bound = "1";
+          t.onclick = async () => {
+            const li = t.closest(".ft-row");
+            const sub = li.querySelector(":scope > ul");
+            if (t.getAttribute("aria-expanded") === "true") { sub.hidden = true; t.setAttribute("aria-expanded", "false"); t.textContent = "▸"; return; }
+            t.setAttribute("aria-expanded", "true"); t.textContent = "▾"; sub.hidden = false;
+            if (!sub.dataset.loaded) {
+              sub.innerHTML = `<li class="muted small">Loading…</li>`;
+              const kids = await F.list(label, li.dataset.path, service);
+              sub.dataset.loaded = "1";
+              sub.innerHTML = kids.map((k) => entryRow(k)).join("");
+              bindTree(sub);
+            }
+          };
+        });
+        el.querySelectorAll("[data-exclude-path]:not([data-bound])").forEach((b) => {
+          b.dataset.bound = "1";
+          confirmClick(b, "Confirm", () => F.exclude(b.dataset.excludePath, b.dataset.excludePath.split("/").pop()));
+        });
+        el.querySelectorAll("[data-restore-path]:not([data-bound])").forEach((b) => {
+          b.dataset.bound = "1";
+          b.onclick = () => F.restore(b.dataset.restorePath, b.dataset.restorePath.split("/").pop());
+        });
+      }
+    });
+  }
+
+  /** Two-step button: the first click asks, the second acts. */
+  function confirmClick(btn, ask, act) {
+    if (!btn) return;
+    const label = btn.textContent;
+    let timer = null;
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      if (btn.dataset.armed) { clearTimeout(timer); act(); return; }
+      btn.dataset.armed = "1";
+      btn.textContent = ask;
+      btn.classList.add("armed");
+      timer = setTimeout(() => { delete btn.dataset.armed; btn.textContent = label; btn.classList.remove("armed"); }, 4000);
+    };
   }
 
   function openSourcePicker(anchor, map, plan, onChange) {

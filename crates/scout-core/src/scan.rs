@@ -8,7 +8,7 @@ use crate::guard::{limit_reason, read_head, Budget, MeteredReader, RatioGuard};
 use crate::limits::Limits;
 use crate::model::{Collection, Format, Item, Reason, SourceKind, Status};
 use crate::placeholder::is_online_only;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File, Metadata};
 use std::io::{self, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
@@ -68,6 +68,11 @@ pub struct Inventory {
     pub attachments: std::collections::BTreeMap<String, Vec<u64>>,
     /// Slack messages seen so far, so overlapping exports count once.
     pub slack_seen: crate::analyze::slack::SeenMessages,
+    /// Links to known services per item, by service. Local only: shows
+    /// which files tie an item to a source.
+    pub links_by_item: HashMap<u64, BTreeMap<&'static str, u32>>,
+    /// The exclusions this assessment was made with.
+    pub exclude: Vec<String>,
 }
 
 struct Ctx {
@@ -90,6 +95,7 @@ struct Scanner<'p> {
     limits_reached: BTreeSet<Reason>,
     attachments: std::collections::BTreeMap<String, Vec<u64>>,
     slack_seen: crate::analyze::slack::SeenMessages,
+    links_by_item: HashMap<u64, BTreeMap<&'static str, u32>>,
 }
 
 /// Scans the selected files and folders. Reads only what was selected.
@@ -117,6 +123,13 @@ pub fn extend_scan(
     opts: ScanOptions,
     progress: &mut dyn FnMut(&Progress),
 ) -> Inventory {
+    // Adding data keeps the exclusions the assessment was made with.
+    let mut opts = opts;
+    if opts.exclude.is_empty() {
+        if let Some(p) = &prev {
+            opts.exclude = p.exclude.clone();
+        }
+    }
     let prev_cancelled = prev.as_ref().is_some_and(|p| p.cancelled);
     let assessment_id = prev
         .as_ref()
@@ -136,6 +149,7 @@ pub fn extend_scan(
         limits_reached: BTreeSet::new(),
         attachments: Default::default(),
         slack_seen: Default::default(),
+        links_by_item: Default::default(),
     };
     if let Some(p) = prev {
         s.records_total = p.items.iter().filter_map(|i| i.records).sum();
@@ -146,6 +160,7 @@ pub fn extend_scan(
         s.limits_reached = p.limits_reached;
         s.attachments = p.attachments;
         s.slack_seen = p.slack_seen;
+        s.links_by_item = p.links_by_item;
         s.limits_reached.remove(&Reason::StoppedByUser);
     }
     for input in inputs {
@@ -199,6 +214,144 @@ pub fn extend_scan(
         assessment_id,
         attachments: s.attachments,
         slack_seen: s.slack_seen,
+        links_by_item: s.links_by_item,
+        exclude: s.opts.exclude.clone(),
+    }
+}
+
+/// Changes an assessment: drops the collections in `remove` and reads the
+/// ones in `reread` again with `opts` (for example a new exclusion list).
+/// Slack exports that counted on a dropped or re-read export for messages
+/// they share are read again too, so every message is still counted once.
+/// Nothing on disk is changed.
+pub fn update_scan(
+    prev: Inventory,
+    remove: &[u32],
+    reread: &[u32],
+    opts: ScanOptions,
+    progress: &mut dyn FnMut(&Progress),
+) -> Inventory {
+    let gone: BTreeSet<u32> = remove.iter().copied().collect();
+    let mut again: BTreeSet<u32> = reread
+        .iter()
+        .copied()
+        .filter(|c| !gone.contains(c))
+        .collect();
+    // Exports that skipped messages first seen in a dropped export.
+    loop {
+        let dropped: BTreeSet<u32> = gone.union(&again).copied().collect();
+        let more: Vec<u32> = prev
+            .collections
+            .iter()
+            .map(|c| c.id)
+            .filter(|id| !dropped.contains(id))
+            .filter(|&id| {
+                prev.slack[id as usize]
+                    .overlaps_with()
+                    .iter()
+                    .any(|o| dropped.contains(o))
+            })
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        again.extend(more);
+    }
+    let paths: Vec<PathBuf> = again
+        .iter()
+        .map(|&id| prev.collections[id as usize].source.clone())
+        .collect();
+    let dropped: Vec<u32> = gone.union(&again).copied().collect();
+    let mut kept = prev.without(&dropped);
+    kept.exclude = opts.exclude.clone();
+    extend_scan(Some(kept), &paths, opts, progress)
+}
+
+impl Inventory {
+    /// The assessment without the given collections, renumbered. Counts that
+    /// span collections are rebuilt when the data map is built; Slack message
+    /// overlaps are handled by [`update_scan`].
+    fn without(self, drop: &[u32]) -> Inventory {
+        let drop: BTreeSet<u32> = drop.iter().copied().collect();
+        let mut cmap: HashMap<u32, u32> = HashMap::new();
+        for c in &self.collections {
+            if !drop.contains(&c.id) {
+                cmap.insert(c.id, cmap.len() as u32);
+            }
+        }
+        let mut imap: HashMap<u64, u64> = HashMap::new();
+        let mut items = Vec::with_capacity(self.items.len());
+        for mut it in self.items {
+            let Some(&c) = cmap.get(&it.collection) else {
+                continue;
+            };
+            let id = items.len() as u64;
+            imap.insert(it.id, id);
+            it.id = id;
+            it.collection = c;
+            it.parent = it.parent.and_then(|p| imap.get(&p).copied());
+            items.push(it);
+        }
+        let mut collections = Vec::new();
+        let mut slack = Vec::new();
+        let mut text = Vec::new();
+        for ((mut c, mut s), mut t) in self.collections.into_iter().zip(self.slack).zip(self.text) {
+            let Some(&n) = cmap.get(&c.id) else {
+                continue;
+            };
+            c.id = n;
+            s.renumber_collections(&cmap);
+            t.sources.renumber_collections(&cmap);
+            collections.push(c);
+            slack.push(s);
+            text.push(t);
+        }
+        let attachments = self
+            .attachments
+            .into_iter()
+            .filter_map(|(k, ids)| {
+                let ids: Vec<u64> = ids.iter().filter_map(|i| imap.get(i).copied()).collect();
+                (!ids.is_empty()).then_some((k, ids))
+            })
+            .collect();
+        let links_by_item = self
+            .links_by_item
+            .into_iter()
+            .filter_map(|(k, v)| imap.get(&k).map(|&n| (n, v)))
+            .collect();
+        let mut slack_seen = self.slack_seen;
+        slack_seen.retain(|_, c| match cmap.get(c) {
+            Some(&n) => {
+                *c = n;
+                true
+            }
+            None => false,
+        });
+        Inventory {
+            items,
+            collections,
+            slack,
+            text,
+            attachments,
+            links_by_item,
+            slack_seen,
+            ..self
+        }
+    }
+
+    /// Collections whose files are under a logical path such as
+    /// `export.zip/random` (paths start with the selection's own name).
+    pub fn collections_for_path(&self, path: &str) -> Vec<u32> {
+        let path = path.trim_matches('/');
+        let mut out: Vec<u32> = self
+            .items
+            .iter()
+            .filter(|it| it.local_path == path || it.local_path.starts_with(&format!("{path}/")))
+            .map(|it| it.collection)
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 }
 
@@ -781,6 +934,10 @@ impl Scanner<'_> {
             self.text[ctx.collection as usize]
                 .sources
                 .scan_text(&sample, ctx.collection);
+            let links = crate::analyze::sources::count_links(&sample);
+            if !links.is_empty() {
+                self.links_by_item.insert(id, links);
+            }
             let ext = crate::detect::extension(&ctx.path);
             let base = ctx
                 .path
@@ -809,6 +966,12 @@ impl Scanner<'_> {
             }
         }
         if let Some(doc) = outcome.json.take() {
+            if let std::collections::hash_map::Entry::Vacant(e) = self.links_by_item.entry(id) {
+                let links = crate::analyze::sources::count_links(&doc.to_string());
+                if !links.is_empty() {
+                    e.insert(links);
+                }
+            }
             self.slack[ctx.collection as usize].offer(
                 &ctx.path,
                 &doc,
