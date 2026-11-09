@@ -490,3 +490,74 @@ fn added_sources_are_recognised_and_linked_pages_resolved() {
     assert_eq!((gh.distinct_targets, gh.resolved_targets), (2, Some(1)));
     assert_eq!(src("email").detected_as, Some("Google Takeout (Mail)"));
 }
+
+#[test]
+fn code_downloads_are_matched_to_linked_repositories() {
+    let d = tempdir("snapshot");
+    let day = json!([
+        {"ts": "1.1", "user": "U1", "text": "PR https://bitbucket.org/cranq/cranq-platform/pull-requests/12"},
+        {"ts": "1.2", "user": "U1", "text": "and https://bitbucket.org/cranq/cranq-platform/src/master/README.md"},
+        {"ts": "1.3", "user": "U1", "text": "also https://bitbucket.org/cranq/tools/pull-requests/3"}
+    ]);
+    let z = zip_bytes(&[
+        (
+            "channels.json",
+            json!([{"name": "eng"}]).to_string().as_bytes(),
+        ),
+        ("users.json", b"[]"),
+        ("eng/2021-01-01.json", day.to_string().as_bytes()),
+    ]);
+    write(&d, "export.zip", &z);
+    // Bitbucket's "Download repository": workspace-repo-commit.zip, no .git.
+    let code = zip_bytes(&[
+        (
+            "cranq-cranq-platform-e326f50e8134/src/main.ts",
+            b"export const x = 1;\n",
+        ),
+        (
+            "cranq-cranq-platform-e326f50e8134/README.md",
+            b"# Platform\n",
+        ),
+    ]);
+    write(&d, "cranq-cranq-platform-e326f50e8134.zip", &code);
+    // A ZIP whose name merely looks like a commit suffix is left alone.
+    write(
+        &d,
+        "notes-deadbeef12.zip",
+        &zip_bytes(&[("a.txt", b"hi\n")]),
+    );
+
+    let inv = scan(
+        &[
+            d.join("export.zip"),
+            d.join("cranq-cranq-platform-e326f50e8134.zip"),
+            d.join("notes-deadbeef12.zip"),
+        ],
+        ScanOptions::default(),
+    );
+    let map = build_data_map(&inv);
+    let col = |l: &str| map.collections.iter().find(|c| c.label == l).unwrap();
+    assert_eq!(
+        col("cranq-cranq-platform-e326f50e8134.zip").display_label,
+        "cranq/cranq-platform (code download)"
+    );
+    assert_eq!(
+        col("notes-deadbeef12.zip").display_label,
+        "notes-deadbeef12.zip"
+    );
+    let bb = map.sources.iter().find(|s| s.id == "bitbucket").unwrap();
+    assert!(bb.in_selection, "the Bitbucket step is done");
+    assert_eq!(bb.detected_as, Some("a code download"));
+    assert!(bb.snapshot_only);
+    assert_eq!(bb.distinct_targets, 3);
+    assert_eq!(bb.resolved_targets, Some(2));
+    assert_eq!(bb.other_repositories, Some(1));
+
+    let plan = scout_core::package::plan(&inv);
+    let e = plan
+        .entries
+        .iter()
+        .find(|e| e.collection == "cranq/cranq-platform (code download)")
+        .unwrap();
+    assert_eq!(e.folders, vec!["Code/cranq-cranq-platform".to_string()]);
+}

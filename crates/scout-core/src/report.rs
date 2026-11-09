@@ -128,6 +128,10 @@ pub struct SourceEntry {
     pub detected_as: Option<&'static str>,
     /// For code hosts: distinct linked pages inside repositories that were added.
     pub resolved_targets: Option<u64>,
+    /// For code hosts: repositories linked to that are not in the map.
+    pub other_repositories: Option<u64>,
+    /// For code hosts: every added repository is a download without history.
+    pub snapshot_only: bool,
     pub links: u64,
     pub distinct_targets: u64,
     pub target_noun: &'static str,
@@ -309,6 +313,7 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
     let mut first_all: Option<i64> = None;
     let mut last_all: Option<i64> = None;
     let mut collections = Vec::new();
+    let snapshots = code_snapshots(inv);
     for c in &inv.collections {
         let i = c.id as usize;
         let slack = inv.slack[i].inventories();
@@ -342,7 +347,10 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
             ),
         };
         collections.push(CollectionSummary {
-            display_label: display_label_for(c, &inv.text[i]),
+            display_label: match snapshots.get(&c.id) {
+                Some(snap) => snap.display_label(),
+                None => display_label_for(c, &inv.text[i]),
+            },
             label: c.label.clone(),
             kind: c.source_kind.label(),
             logical_files: col_files[i],
@@ -610,6 +618,137 @@ fn takeout_part(label: &str) -> Option<String> {
     (!part.is_empty()).then(|| part.to_string())
 }
 
+/// A repository added as a code download (for example Bitbucket's or
+/// GitHub's "Download ZIP"), recognised by matching the archive or folder
+/// name against repositories the data links to. Downloads carry no history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeSnapshot {
+    pub service: &'static str,
+    /// "host/owner/repo", lower case.
+    pub remote: String,
+}
+
+impl CodeSnapshot {
+    /// "owner/repo".
+    pub fn repo(&self) -> &str {
+        self.remote
+            .split_once('/')
+            .map_or(self.remote.as_str(), |x| x.1)
+    }
+    pub fn display_label(&self) -> String {
+        format!("{} (code download)", self.repo())
+    }
+}
+
+/// "host/owner/repo" for a linked page on a code host, lower case.
+fn repo_of_target(target: &str) -> Option<String> {
+    let t = target.to_ascii_lowercase();
+    let mut it = t.split('/');
+    let (host, owner, repo) = (it.next()?, it.next()?, it.next()?);
+    let repo = repo.trim_end_matches(".git");
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("{host}/{owner}/{repo}"))
+}
+
+/// Names a code download might be saved under, from its archive or folder
+/// name: "acme-app-e326f50e8134.zip" (Bitbucket: workspace, repository and
+/// commit) and "app-main.zip" (GitHub and GitLab: repository and branch).
+fn snapshot_stems(label: &str) -> Vec<String> {
+    let mut stem = label.to_ascii_lowercase();
+    for ext in [".tar.gz", ".tgz", ".tar.bz2", ".tar", ".zip"] {
+        if let Some(s) = stem.strip_suffix(ext) {
+            stem = s.to_string();
+            break;
+        }
+    }
+    let mut out = Vec::new();
+    if let Some((head, tail)) = stem.rsplit_once('-') {
+        let is_commit =
+            (7..=40).contains(&tail.len()) && tail.bytes().all(|b| b.is_ascii_hexdigit());
+        let is_branch = matches!(
+            tail,
+            "main" | "master" | "develop" | "development" | "trunk"
+        );
+        if is_commit || is_branch {
+            out.push(head.to_string());
+        }
+    }
+    out.push(stem);
+    out
+}
+
+/// Collections that are code downloads of repositories the data links to.
+pub fn code_snapshots(inv: &Inventory) -> HashMap<u32, CodeSnapshot> {
+    // Repositories linked to from anywhere in the assessment.
+    let mut repos: BTreeMap<String, &'static str> = BTreeMap::new();
+    for c in &inv.collections {
+        let i = c.id as usize;
+        for tally in [&inv.slack[i].sources, &inv.text[i].sources] {
+            for (&id, st) in &tally.by_service {
+                if !matches!(id, "github" | "gitlab" | "bitbucket") {
+                    continue;
+                }
+                for t in &st.targets {
+                    if let Some(r) = repo_of_target(t) {
+                        repos.entry(r).or_insert(id);
+                    }
+                }
+            }
+        }
+    }
+    let mut out = HashMap::new();
+    for c in &inv.collections {
+        let t = &inv.text[c.id as usize];
+        if c.source_kind == SourceKind::SlackExport
+            || !t.git_remotes.is_empty()
+            || !t.takeout_products.is_empty()
+        {
+            continue;
+        }
+        let stems = snapshot_stems(&c.label);
+        // Prefer "owner-repo" (unambiguous) over a bare repository name.
+        let found = repos
+            .iter()
+            .find(|(r, _)| {
+                let mut p = r.splitn(3, '/').skip(1);
+                let (o, n) = (p.next().unwrap_or(""), p.next().unwrap_or(""));
+                stems.iter().any(|s| *s == format!("{o}-{n}"))
+            })
+            .or_else(|| {
+                // Otherwise the longest repository name the archive name is
+                // or ends with ("<anything>-<repo>"), if only one has it.
+                let name = |r: &str| r.rsplit('/').next().unwrap_or("").to_string();
+                let hits: Vec<_> = repos
+                    .iter()
+                    .filter(|(r, _)| {
+                        let n = name(r);
+                        stems
+                            .iter()
+                            .any(|s| *s == n || s.ends_with(&format!("-{n}")))
+                    })
+                    .collect();
+                let best = hits.iter().map(|(r, _)| name(r).len()).max()?;
+                let mut top = hits.into_iter().filter(|(r, _)| name(r).len() == best);
+                match (top.next(), top.next()) {
+                    (Some(h), None) => Some(h),
+                    _ => None,
+                }
+            });
+        if let Some((r, &service)) = found {
+            out.insert(
+                c.id,
+                CodeSnapshot {
+                    service,
+                    remote: r.clone(),
+                },
+            );
+        }
+    }
+    out
+}
+
 fn source_entries(inv: &Inventory) -> Vec<SourceEntry> {
     let mut all = SourceTally::default();
     for c in &inv.collections {
@@ -639,6 +778,7 @@ fn source_entries(inv: &Inventory) -> Vec<SourceEntry> {
     }
     let mut detected: BTreeMap<&'static str, &'static str> = BTreeMap::new();
     let mut remotes: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
+    let mut cloned: BTreeSet<&'static str> = BTreeSet::new();
     for c in &inv.collections {
         let t = &inv.text[c.id as usize];
         if t.takeout_products.contains("Drive") {
@@ -657,9 +797,18 @@ fn source_entries(inv: &Inventory) -> Vec<SourceEntry> {
             if let Some(id) = crate::analyze::sources::classify(host, &format!("/{path}")) {
                 present.entry(id).or_default().insert(c.label.clone());
                 detected.insert(id, "a Git repository");
-                remotes.entry(id).or_default().push(r.clone());
+                remotes.entry(id).or_default().push(r.to_ascii_lowercase());
+                cloned.insert(id);
             }
         }
+    }
+    for (cid, snap) in code_snapshots(inv) {
+        present
+            .entry(snap.service)
+            .or_default()
+            .insert(inv.collections[cid as usize].label.clone());
+        detected.entry(snap.service).or_insert("a code download");
+        remotes.entry(snap.service).or_default().push(snap.remote);
     }
     detected.entry("slack").or_insert("a Slack export");
     detected.entry("email").or_insert("a mailbox");
@@ -684,6 +833,15 @@ fn source_entries(inv: &Inventory) -> Vec<SourceEntry> {
                     })
                     .count() as u64
             });
+            let other_repositories = remotes.get(id).map(|rs| {
+                st.targets
+                    .iter()
+                    .filter_map(|t| repo_of_target(t))
+                    .filter(|r| !rs.contains(r))
+                    .collect::<BTreeSet<_>>()
+                    .len() as u64
+            });
+            let snapshot_only = remotes.contains_key(id) && !cloned.contains(id);
             let mut parts = Vec::new();
             if st.links > 0 {
                 let noun = if distinct == 1 {
@@ -739,6 +897,8 @@ fn source_entries(inv: &Inventory) -> Vec<SourceEntry> {
                         None
                     },
                     resolved_targets,
+                    other_repositories,
+                    snapshot_only,
                     collections,
                     links: st.links,
                     distinct_targets: distinct,
