@@ -114,7 +114,13 @@ fn by_text_structure(h: &[u8], ext: &str) -> Option<Format> {
     if ext == "jsonl" || ext == "ndjson" {
         return Some(Format::Jsonl);
     }
-    if t.starts_with('{') || t.starts_with('[') {
+    // "[" opens JSON only when followed by a value; "[core]" is an INI
+    // section header (e.g. a .git/config), not an array.
+    let json_array = t.starts_with('[')
+        && t[1..].trim_start().chars().next().is_some_and(|c| {
+            matches!(c, '{' | '[' | '"' | ']' | '-' | '0'..='9' | 't' | 'f' | 'n')
+        });
+    if t.starts_with('{') || json_array {
         let lines: Vec<&str> = t.lines().filter(|l| !l.trim().is_empty()).take(3).collect();
         let multi_object_lines = lines.len() >= 2
             && lines.iter().all(|l| {
@@ -220,6 +226,11 @@ mod tests {
     #[test]
     fn text_structure() {
         assert_eq!(detect("x", b"[{\"a\":1}]"), Format::Json);
+        assert_eq!(detect("x", b"[ 1, 2 ]"), Format::Json);
+        assert_eq!(
+            detect("app/.git/config", b"[core]\n\tbare = false\n"),
+            Format::PlainText
+        );
         assert_eq!(detect("x", b"{\"a\":1}\n{\"a\":2}\n"), Format::Jsonl);
         assert_eq!(detect("data.csv", b"a,b\n1,2\n"), Format::Csv);
         assert_eq!(

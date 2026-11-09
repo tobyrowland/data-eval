@@ -87,7 +87,11 @@ pub struct DateCoverage {
 
 #[derive(Debug, Serialize)]
 pub struct CollectionSummary {
+    /// Identifies the collection (the selected file or folder name).
     pub label: String,
+    /// A friendlier name where the content says what it is, e.g.
+    /// "Google Takeout · Drive" for a Takeout archive.
+    pub display_label: String,
     pub kind: &'static str,
     pub logical_files: u64,
     pub by_status: BTreeMap<Status, u64>,
@@ -120,6 +124,10 @@ pub struct SourceEntry {
     pub in_selection: bool,
     /// Collections that are this source (for sources already in the map).
     pub collections: Vec<String>,
+    /// How the source was recognised in the map, e.g. "Google Takeout (Drive)".
+    pub detected_as: Option<&'static str>,
+    /// For code hosts: distinct linked pages inside repositories that were added.
+    pub resolved_targets: Option<u64>,
     pub links: u64,
     pub distinct_targets: u64,
     pub target_noun: &'static str,
@@ -151,6 +159,10 @@ pub struct LanguageSummary {
     pub unreadable_documents: u64,
     /// Media and binary files, which carry no readable text.
     pub non_text_files: u64,
+    /// Words in code, logs, data or placeholder text, left out of the shares.
+    pub code_or_data_words: u64,
+    /// Files skipped as code or data by their type (e.g. .js, .csv, .log).
+    pub code_or_data_files: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -160,6 +172,7 @@ pub struct CollectionLanguages {
     pub basis: &'static str,
     pub words_examined: u64,
     pub undetermined_words: u64,
+    pub code_or_data_words: u64,
     pub rows: Vec<LanguageRow>,
 }
 
@@ -329,6 +342,7 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
             ),
         };
         collections.push(CollectionSummary {
+            display_label: display_label_for(c, &inv.text[i]),
             label: c.label.clone(),
             kind: c.source_kind.label(),
             logical_files: col_files[i],
@@ -559,6 +573,43 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
     }
 }
 
+/// A readable name for a collection when its content says what it is.
+pub fn display_label_for(c: &crate::model::Collection, t: &crate::scan::TextTotals) -> String {
+    if !t.takeout_products.is_empty() {
+        let products: Vec<&str> = t
+            .takeout_products
+            .iter()
+            .map(String::as_str)
+            .take(3)
+            .collect();
+        let more = t.takeout_products.len().saturating_sub(3);
+        let mut name = format!("Google Takeout · {}", products.join(", "));
+        if more > 0 {
+            name.push_str(&format!(" +{more}"));
+        }
+        // Takeout splits large exports into numbered archives.
+        if let Some(part) = takeout_part(&c.label) {
+            name.push_str(&format!(" · part {part}"));
+        }
+        return name;
+    }
+    if t.git_remotes.len() == 1 {
+        let r = t.git_remotes.iter().next().unwrap();
+        let repo = r.split_once('/').map_or(r.as_str(), |x| x.1);
+        return format!("{repo} (Git repository)");
+    }
+    c.label.clone()
+}
+
+/// "3-001" from "takeout-20261106T153241Z-3-001.zip".
+fn takeout_part(label: &str) -> Option<String> {
+    let rest = label.strip_prefix("takeout-")?;
+    let (_, tail) = rest.split_once('Z')?;
+    let tail = tail.trim_start_matches('-');
+    let part = tail.split('.').next()?;
+    (!part.is_empty()).then(|| part.to_string())
+}
+
 fn source_entries(inv: &Inventory) -> Vec<SourceEntry> {
     let mut all = SourceTally::default();
     for c in &inv.collections {
@@ -586,6 +637,32 @@ fn source_entries(inv: &Inventory) -> Vec<SourceEntry> {
                 .insert(inv.collections[it.collection as usize].label.clone());
         }
     }
+    let mut detected: BTreeMap<&'static str, &'static str> = BTreeMap::new();
+    let mut remotes: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
+    for c in &inv.collections {
+        let t = &inv.text[c.id as usize];
+        if t.takeout_products.contains("Drive") {
+            present
+                .entry("google_drive")
+                .or_default()
+                .insert(c.label.clone());
+            detected.insert("google_drive", "Google Takeout (Drive)");
+        }
+        if t.takeout_products.contains("Mail") {
+            present.entry("email").or_default().insert(c.label.clone());
+            detected.insert("email", "Google Takeout (Mail)");
+        }
+        for r in &t.git_remotes {
+            let (host, path) = r.split_once('/').unwrap_or((r.as_str(), ""));
+            if let Some(id) = crate::analyze::sources::classify(host, &format!("/{path}")) {
+                present.entry(id).or_default().insert(c.label.clone());
+                detected.insert(id, "a Git repository");
+                remotes.entry(id).or_default().push(r.clone());
+            }
+        }
+    }
+    detected.entry("slack").or_insert("a Slack export");
+    detected.entry("email").or_insert("a mailbox");
     let label = |c: u32| inv.collections[c as usize].label.clone();
     let mut ids: BTreeSet<&'static str> = all.by_service.keys().copied().collect();
     ids.extend(present.keys().copied());
@@ -596,6 +673,17 @@ fn source_entries(inv: &Inventory) -> Vec<SourceEntry> {
             let st = all.by_service.get(id).cloned().unwrap_or_default();
             let in_selection = present.contains_key(id);
             let distinct = st.targets.len() as u64;
+            // Linked pages that sit inside a repository that was added.
+            let resolved_targets = remotes.get(id).map(|rs| {
+                st.targets
+                    .iter()
+                    .filter(|t| {
+                        let t = t.to_ascii_lowercase();
+                        rs.iter()
+                            .any(|r| t == *r || t.starts_with(&format!("{r}/")))
+                    })
+                    .count() as u64
+            });
             let mut parts = Vec::new();
             if st.links > 0 {
                 let noun = if distinct == 1 {
@@ -645,6 +733,12 @@ fn source_entries(inv: &Inventory) -> Vec<SourceEntry> {
                     name: svc.name,
                     category: svc.category,
                     in_selection,
+                    detected_as: if in_selection {
+                        detected.get(id).copied()
+                    } else {
+                        None
+                    },
+                    resolved_targets,
                     collections,
                     links: st.links,
                     distinct_targets: distinct,
@@ -683,6 +777,7 @@ fn language_summary(inv: &Inventory) -> LanguageSummary {
                 basis,
                 words_examined: examined,
                 undetermined_words: tally.undetermined_words,
+                code_or_data_words: tally.non_prose_words,
                 rows: tally.rows(),
             });
         }
@@ -714,6 +809,8 @@ fn language_summary(inv: &Inventory) -> LanguageSummary {
         sampled_documents: all.sampled_documents,
         unreadable_documents: unreadable,
         non_text_files: non_text,
+        code_or_data_words: all.non_prose_words,
+        code_or_data_files: all.non_prose_files,
     }
 }
 
@@ -881,6 +978,14 @@ pub fn render_text(m: &DataMap) -> String {
                 "Too short to tell",
                 group(l.undetermined_words),
                 l.undetermined_percent
+            );
+        }
+        if l.code_or_data_words > 0 || l.code_or_data_files > 0 {
+            let _ = writeln!(
+                s,
+                "  Set aside: {} words of code, data or placeholder text; {} code and data files skipped",
+                group(l.code_or_data_words),
+                group(l.code_or_data_files)
             );
         }
         if l.unreadable_documents > 0 {

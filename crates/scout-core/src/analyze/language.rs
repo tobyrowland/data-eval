@@ -9,7 +9,7 @@
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-pub const METHOD: &str = "whatlang 0.18 trigram detector, run locally on this computer; segments of 60+ letters take the detector's top language, 20 to 59 letters need a confident result, and anything shorter or ambiguous is left undetermined";
+pub const METHOD: &str = "whatlang 0.18 trigram detector, run locally on this computer, on prose only: code and data files (such as .js, .json, .csv, .log) are skipped, and passages that read like code, logs or placeholder text are set aside. Segments of 60+ letters take the detector's top language, 20 to 59 letters need a confident result, and anything shorter is left undetermined. Closely related pairs (Danish/Norwegian, Czech/Slovak, Croatian/Serbian) are reported together when they can't be told apart, and Chinese, Japanese and Thai are counted at two characters per word";
 
 /// Segments with fewer letters than this are not classified.
 const MIN_LETTERS: usize = 20;
@@ -28,6 +28,12 @@ pub struct LanguageTally {
     pub by_code: BTreeMap<&'static str, (u64, u64)>,
     pub undetermined_words: u64,
     pub undetermined_segments: u64,
+    /// Text that isn't prose: code, logs, data or placeholder text. Left out
+    /// of the language shares rather than being misread as a language.
+    pub non_prose_words: u64,
+    pub non_prose_segments: u64,
+    /// Files skipped because their type is code or data (e.g. .js, .csv).
+    pub non_prose_files: u64,
     /// Documents whose text was sampled rather than read in full.
     pub sampled_documents: u64,
 }
@@ -35,11 +41,16 @@ pub struct LanguageTally {
 impl LanguageTally {
     /// Classifies one short unit of text, such as a chat message.
     pub fn add_segment(&mut self, text: &str) {
-        let words = text.split_whitespace().count() as u64;
+        let words = word_count(text);
         if words == 0 {
             return;
         }
         let letters = text.chars().filter(|c| c.is_alphabetic()).count();
+        if letters >= MIN_LETTERS && (!looks_like_prose(text) || is_placeholder(text)) {
+            self.non_prose_words += words;
+            self.non_prose_segments += 1;
+            return;
+        }
         let detected = if letters >= SENTENCE_LETTERS {
             whatlang::detect(text)
         } else if letters >= MIN_LETTERS {
@@ -49,7 +60,7 @@ impl LanguageTally {
         };
         match detected {
             Some(info) => {
-                let e = self.by_code.entry(info.lang().code()).or_default();
+                let e = self.by_code.entry(group_code(&info, text)).or_default();
                 e.0 += words;
                 e.1 += 1;
             }
@@ -109,6 +120,9 @@ impl LanguageTally {
         }
         self.undetermined_words += other.undetermined_words;
         self.undetermined_segments += other.undetermined_segments;
+        self.non_prose_words += other.non_prose_words;
+        self.non_prose_segments += other.non_prose_segments;
+        self.non_prose_files += other.non_prose_files;
         self.sampled_documents += other.sampled_documents;
     }
 
@@ -153,10 +167,234 @@ pub fn pct(part: u64, total: u64) -> f64 {
     }
 }
 
+/// Closely related languages the detector often confuses. When it isn't
+/// confident, the pair is reported together rather than guessed.
+fn group_code(info: &whatlang::Info, text: &str) -> &'static str {
+    use whatlang::Lang::*;
+    let unsure = info.confidence() < 0.5;
+    match info.lang() {
+        // Czech and Slovak each use letters the other doesn't; the detector's
+        // confidence alone is not enough to tell them apart.
+        Ces | Slk => {
+            let czech = text.chars().any(|c| "řůěŘŮĚ".contains(c));
+            let slovak = text.chars().any(|c| "ľĺŕôäĽĹŔÔÄ".contains(c));
+            match (czech, slovak) {
+                (true, false) => "ces",
+                (false, true) => "slk",
+                _ => "ces+slk",
+            }
+        }
+        Dan | Nob if unsure => "dan+nob",
+        Hrv | Srp if unsure => "hrv+srp",
+        l => l.code(),
+    }
+}
+
+/// Scripts written without spaces between words (Chinese, Japanese, Thai,
+/// Lao, Khmer, Burmese).
+fn is_unspaced(c: char) -> bool {
+    matches!(c,
+        '\u{3040}'..='\u{30ff}' | '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}'
+        | '\u{0e00}'..='\u{0eff}' | '\u{1780}'..='\u{17ff}' | '\u{1000}'..='\u{109f}')
+}
+
+/// Words, counting text in unspaced scripts as one word per two characters,
+/// a common approximation, so Chinese or Japanese isn't undercounted.
+pub fn word_count(text: &str) -> u64 {
+    let mut words = 0u64;
+    let mut unspaced = 0u64;
+    for tok in text.split_whitespace() {
+        let n = tok.chars().filter(|&c| is_unspaced(c)).count() as u64;
+        if n > 0 {
+            unspaced += n;
+            if tok.chars().any(|c| c.is_alphabetic() && !is_unspaced(c)) {
+                words += 1;
+            }
+        } else {
+            words += 1;
+        }
+    }
+    words + unspaced.div_ceil(2)
+}
+
 fn name_of(code: &str) -> &'static str {
+    match code {
+        "dan+nob" => return "Danish or Norwegian",
+        "ces+slk" => return "Czech or Slovak",
+        "hrv+srp" => return "Croatian or Serbian",
+        _ => {}
+    }
     whatlang::Lang::from_code(code)
         .map(|l| l.eng_name())
         .unwrap_or("Unknown")
+}
+
+/// Whether text reads like human prose rather than code, logs or data.
+/// Code tokens look like Latin, Danish or Catalan to a trigram detector,
+/// so anything that fails this is set aside instead of being classified.
+pub fn looks_like_prose(text: &str) -> bool {
+    let mut visible = 0usize;
+    let mut letters = 0usize;
+    let mut code_marks = 0usize;
+    let mut digits = 0usize;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            continue;
+        }
+        visible += 1;
+        if c.is_alphabetic() {
+            letters += 1;
+        } else if c.is_ascii_digit() {
+            digits += 1;
+        } else if "{}[]()<>;=_/\\|#*`$@&^~+".contains(c) {
+            code_marks += 1;
+        }
+    }
+    if visible == 0 {
+        return false;
+    }
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    // A token is word-like when it is mostly letters once surrounding
+    // punctuation (in any script, e.g. "。" or "«") is removed.
+    let wordlike = tokens
+        .iter()
+        .filter(|t| {
+            let t = t.trim_matches(|c: char| !c.is_alphanumeric());
+            let n = t.chars().count();
+            n > 0
+                && t.chars()
+                    .filter(|c| c.is_alphabetic() || *c == '\'' || *c == '’' || *c == '-')
+                    .count()
+                    * 100
+                    >= n * 80
+        })
+        .count();
+    letters * 100 >= visible * 70
+        && code_marks * 100 <= visible * 4
+        && digits * 100 <= visible * 15
+        && wordlike * 100 >= tokens.len().max(1) * 60
+}
+
+/// "Lorem ipsum" placeholder text, which the detector would call Latin.
+pub fn is_placeholder(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    t.contains("lorem ipsum") || t.contains("dolor sit amet")
+}
+
+/// File types that hold code or data rather than prose.
+pub fn is_code_or_data_ext(ext: &str) -> bool {
+    matches!(
+        ext,
+        "js" | "mjs"
+            | "cjs"
+            | "ts"
+            | "tsx"
+            | "jsx"
+            | "py"
+            | "rb"
+            | "php"
+            | "java"
+            | "kt"
+            | "kts"
+            | "scala"
+            | "go"
+            | "rs"
+            | "c"
+            | "h"
+            | "cc"
+            | "cpp"
+            | "hpp"
+            | "cs"
+            | "swift"
+            | "m"
+            | "mm"
+            | "dart"
+            | "lua"
+            | "r"
+            | "pl"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "ps1"
+            | "bat"
+            | "cmd"
+            | "sql"
+            | "graphql"
+            | "proto"
+            | "vue"
+            | "svelte"
+            | "css"
+            | "scss"
+            | "sass"
+            | "less"
+            | "json"
+            | "jsonl"
+            | "ndjson"
+            | "yml"
+            | "yaml"
+            | "toml"
+            | "ini"
+            | "cfg"
+            | "conf"
+            | "env"
+            | "properties"
+            | "lock"
+            | "gradle"
+            | "xml"
+            | "svg"
+            | "plist"
+            | "csv"
+            | "tsv"
+            | "log"
+            | "map"
+            | "ipynb"
+            | "tf"
+            | "hcl"
+            | "dockerfile"
+            | "makefile"
+            | "cmake"
+            | "gitignore"
+            | "gitattributes"
+            | "editorconfig"
+            | "pem"
+            | "crt"
+            | "key"
+    )
+}
+
+/// Removes code blocks, inline code and :emoji: shortcodes from a chat
+/// message so only the prose is classified.
+pub fn strip_chat_code(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    // ```fenced``` blocks
+    while let Some(start) = rest.find("```") {
+        out.push_str(&rest[..start]);
+        match rest[start + 3..].find("```") {
+            Some(end) => rest = &rest[start + 3 + end + 3..],
+            None => {
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    // `inline code`
+    let mut cleaned = String::with_capacity(out.len());
+    let mut in_code = false;
+    for c in out.chars() {
+        if c == '`' {
+            in_code = !in_code;
+            cleaned.push(' ');
+        } else if !in_code {
+            cleaned.push(c);
+        }
+    }
+    // :emoji_shortcodes:
+    cleaned
+        .split_whitespace()
+        .filter(|w| !(w.len() > 2 && w.starts_with(':') && w.ends_with(':')))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Removes markup so tags and attributes don't skew detection.
@@ -216,6 +454,74 @@ mod tests {
         assert_eq!(
             rows.iter().find(|r| r.code == "eng").unwrap().language,
             "English"
+        );
+    }
+
+    #[test]
+    fn code_logs_data_and_placeholders_are_not_languages() {
+        let mut t = LanguageTally::default();
+        t.add_segment(
+            "function updateUser(id, data) { return db.users.update({ where: { id }, data }); }",
+        );
+        t.add_segment("const result = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } });");
+        t.add_segment("2024-03-01 12:00:01 INFO server started on port 8080 pid=1234 env=production region=eu-west-1");
+        t.add_segment("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore");
+        assert!(t.by_code.is_empty(), "{:?}", t.by_code);
+        assert_eq!(t.non_prose_segments, 4);
+    }
+
+    #[test]
+    fn hungarian_is_recognised() {
+        let mut t = LanguageTally::default();
+        t.add_segment("Szia, meg tudnád nézni, hogy miért nem működik a fizetési rendszer a tegnapi frissítés óta?");
+        t.add_segment("A megrendelő azt kérte, hogy a jövő héten küldjük el a végleges ajánlatot és a szerződést.");
+        t.add_segment(&strip_chat_code("Köszönöm, holnap reggel átnézem a dokumentumot :thumbsup: ```let x = 1;``` és visszajelzek a csapatnak."));
+        assert_eq!(
+            t.by_code.get("hun").map(|v| v.1),
+            Some(3),
+            "{:?}",
+            t.by_code
+        );
+    }
+
+    #[test]
+    fn unspaced_scripts_and_close_pairs() {
+        let mut t = LanguageTally::default();
+        t.add_segment("客户要求我们下周把最终报价和合同一起发过去。我们会尽快准备好所有的文件。");
+        t.add_segment("顧客から来週、最終見積もりと契約書を一緒に送るよう依頼がありました。");
+        t.add_segment(
+            "Hvordan går det med prosjektet? Vi må levere rapporten til kunden før fredag.",
+        );
+        t.add_segment(
+            "Klient požiadal, aby sme budúci týždeň poslali konečnú ponuku spolu so zmluvou.",
+        );
+        let rows = t.rows();
+        let get = |c: &str| {
+            rows.iter()
+                .find(|r| r.code == c)
+                .map(|r| (r.words, r.language))
+        };
+        assert!(get("cmn").is_some_and(|(w, _)| w >= 15), "{rows:?}");
+        assert!(get("jpn").is_some(), "{rows:?}");
+        assert_eq!(
+            get("dan+nob").map(|x| x.1),
+            Some("Danish or Norwegian"),
+            "{rows:?}"
+        );
+        assert_eq!(
+            get("ces+slk").map(|x| x.1),
+            Some("Czech or Slovak"),
+            "{rows:?}"
+        );
+        assert_eq!(t.non_prose_segments, 0);
+        assert_eq!(word_count("hello 世界和平 world"), 4);
+    }
+
+    #[test]
+    fn chat_code_is_stripped() {
+        assert_eq!(
+            strip_chat_code("fix: ```\nfn main() {}\n``` done :tada: see `foo()` now"),
+            "fix: done see now"
         );
     }
 

@@ -45,6 +45,10 @@ pub struct TextTotals {
     pub languages: crate::analyze::language::LanguageTally,
     /// Links to other systems found in readable documents.
     pub sources: crate::analyze::sources::SourceTally,
+    /// Google Takeout products seen in this collection (e.g. "Drive", "Mail").
+    pub takeout_products: std::collections::BTreeSet<String>,
+    /// Git remotes of repositories in this collection, as host/owner/repo.
+    pub git_remotes: std::collections::BTreeSet<String>,
 }
 
 /// The private local result of a scan. Contains local paths and hashes and
@@ -228,6 +232,12 @@ impl Scanner<'_> {
             sha256: None,
             records: None,
         });
+        if let Some(product) = crate::analyze::sources::takeout_product(&ctx.path) {
+            let t = &mut self.text[ctx.collection as usize].takeout_products;
+            if !t.contains(product) {
+                t.insert(product.to_string());
+            }
+        }
         if let Some(fid) = crate::analyze::slack::attachment_file_id(&ctx.path) {
             self.attachments
                 .entry(fid.to_string())
@@ -756,11 +766,31 @@ impl Scanner<'_> {
         let sha = complete.then(|| m.finish_hash());
         if let Some((sample, truncated)) = outcome.sample.take() {
             use crate::analyze::language::{strip_mail_headers, strip_markup};
+            if crate::analyze::sources::is_git_config(&ctx.path) {
+                self.text[ctx.collection as usize]
+                    .git_remotes
+                    .extend(crate::analyze::sources::git_remotes(&sample));
+            }
             // Before markup is stripped, so HTML links are seen too.
             self.text[ctx.collection as usize]
                 .sources
                 .scan_text(&sample, ctx.collection);
+            let ext = crate::detect::extension(&ctx.path);
+            let base = ctx
+                .path
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let code_or_data = crate::analyze::language::is_code_or_data_ext(&ext)
+                || crate::analyze::language::is_code_or_data_ext(&base)
+                || ctx.path.contains("/.git/")
+                || ctx.path.contains("/node_modules/");
+            if code_or_data {
+                self.text[ctx.collection as usize].languages.non_prose_files += 1;
+            }
             let text = match format {
+                _ if code_or_data => None,
                 Format::Html => Some(strip_markup(&sample)),
                 Format::Mbox | Format::Eml => Some(strip_mail_headers(&sample)),
                 Format::PlainText | Format::Markdown => Some(sample),

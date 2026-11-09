@@ -9,6 +9,7 @@ pub mod detect;
 pub mod guard;
 pub mod limits;
 pub mod model;
+pub mod package;
 pub mod placeholder;
 pub mod report;
 pub mod scan;

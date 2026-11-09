@@ -201,8 +201,9 @@ impl SlackRecogniser {
                     if added == Some(true) {
                         if let Some(text) = m.get("text").and_then(Value::as_str) {
                             // Mentions and links are <...> tokens; drop them.
+                            let prose = super::language::strip_chat_code(text);
                             self.languages
-                                .add_segment(&super::language::strip_markup(text));
+                                .add_segment(&super::language::strip_markup(&prose));
                         }
                     }
                 }

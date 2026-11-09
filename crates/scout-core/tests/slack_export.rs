@@ -430,3 +430,63 @@ fn data_sources_are_built_from_links_apps_and_bots() {
         assert!(!json.contains(leak), "data map leaked {leak}");
     }
 }
+
+#[test]
+fn added_sources_are_recognised_and_linked_pages_resolved() {
+    let d = tempdir("detect");
+    let day = json!([
+        {"ts": "1.1", "user": "U1", "text": "see https://github.com/acme/app/pull/1 and https://github.com/other/lib/pull/2"},
+        {"ts": "1.2", "user": "U1", "text": "spec https://docs.google.com/document/d/abc/edit"}
+    ]);
+    let z = zip_bytes(&[
+        (
+            "channels.json",
+            json!([{"name": "eng"}]).to_string().as_bytes(),
+        ),
+        ("users.json", b"[]"),
+        ("eng/2021-01-01.json", day.to_string().as_bytes()),
+    ]);
+    write(&d, "export.zip", &z);
+    let takeout = zip_bytes(&[
+        ("Takeout/archive_browser.html", b"<html></html>"),
+        ("Takeout/Drive/Plans/Roadmap.md", b"# Roadmap\n"),
+        (
+            "Takeout/Mail/All mail.mbox",
+            b"From a@b Mon\nFrom: a\nSubject: x\n\nhello\n",
+        ),
+    ]);
+    write(&d, "takeout-20261106T153241Z-3-001.zip", &takeout);
+    write(
+        &d,
+        "app/.git/config",
+        b"[core]\n\tbare = false\n[remote \"origin\"]\n\turl = git@github.com:acme/app.git\n",
+    );
+    write(&d, "app/.git/HEAD", b"ref: refs/heads/main\n");
+    write(&d, "app/src/main.rs", b"fn main() {}\n");
+
+    let inv = scan(
+        &[
+            d.join("export.zip"),
+            d.join("takeout-20261106T153241Z-3-001.zip"),
+            d.join("app"),
+        ],
+        ScanOptions::default(),
+    );
+    let map = build_data_map(&inv);
+    let col = |l: &str| map.collections.iter().find(|c| c.label == l).unwrap();
+    assert_eq!(
+        col("takeout-20261106T153241Z-3-001.zip").display_label,
+        "Google Takeout · Drive, Mail · part 3-001"
+    );
+    assert_eq!(col("app").display_label, "acme/app (Git repository)");
+    let src = |id: &str| map.sources.iter().find(|s| s.id == id).unwrap();
+    let gd = src("google_drive");
+    assert!(gd.in_selection);
+    assert_eq!(gd.detected_as, Some("Google Takeout (Drive)"));
+    assert_eq!(gd.links, 1, "the step stays evidenced after it is done");
+    let gh = src("github");
+    assert!(gh.in_selection);
+    assert_eq!(gh.detected_as, Some("a Git repository"));
+    assert_eq!((gh.distinct_targets, gh.resolved_targets), (2, Some(1)));
+    assert_eq!(src("email").detected_as, Some("Google Takeout (Mail)"));
+}

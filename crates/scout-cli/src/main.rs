@@ -17,10 +17,16 @@ Working Minds — understand your company data, privately.
 
 Usage:
   working-minds scan <file-or-folder>... [--exclude <path>]... [--json <out.json>]
+  working-minds pack <file-or-folder>... --out <folder> [--exclude <path>]...
+
+  pack copies everything into one new folder with standard names (Slack/,
+  Google Drive/, Google Mail/, Email/, Code/<repo>/, Documents/, Other/),
+  unpacking and merging Google Takeout parts. Originals are not changed.
 
 Options:
   --exclude <path>   Leave out a path, relative to a selection (e.g. export.zip/random)
   --json <file>      Also save the data map as JSON
+  --out <folder>     Where pack creates the data pack folder
   -h, --help         Show this help
 
 Assessment happens on this computer. No data is sent to us or to an AI service.";
@@ -35,19 +41,25 @@ fn main() -> ExitCode {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    if args[0] != "scan" {
+    let packing = args[0] == "pack";
+    if args[0] != "scan" && !packing {
         eprintln!("Unknown command '{}'.\n\n{USAGE}", args[0]);
         return ExitCode::from(2);
     }
     let mut inputs = Vec::new();
     let mut opts = ScanOptions::default();
     let mut json_out: Option<PathBuf> = None;
+    let mut pack_out: Option<PathBuf> = None;
     let mut it = args[1..].iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--exclude" => match it.next() {
                 Some(v) => opts.exclude.push(v.clone()),
                 None => return usage_error("--exclude needs a path"),
+            },
+            "--out" => match it.next() {
+                Some(v) => pack_out = Some(PathBuf::from(v)),
+                None => return usage_error("--out needs a folder"),
             },
             "--json" => match it.next() {
                 Some(v) => json_out = Some(PathBuf::from(v)),
@@ -70,6 +82,35 @@ fn main() -> ExitCode {
 
     eprintln!("Working on your computer. Nothing is being uploaded.");
     let inventory = scan(&inputs, opts);
+    if packing {
+        let Some(out) = pack_out else {
+            return usage_error("pack needs --out <folder>");
+        };
+        if let Err(e) = std::fs::create_dir_all(&out) {
+            eprintln!("Could not create {}: {e}", out.display());
+            return ExitCode::FAILURE;
+        }
+        let plan = scout_core::package::plan(&inventory);
+        for e in &plan.entries {
+            println!("  {:<28} → {}", e.collection, e.folders.join(", "));
+        }
+        let s = scout_core::package::build(
+            &inventory,
+            &plan,
+            &out,
+            "Working Minds data pack",
+            None,
+            &mut |_| {},
+        );
+        match &s.error {
+            None => println!("Created {} ({} files).", s.folder, s.files_copied),
+            Some(e) => {
+                eprintln!("Copying stopped: {e}. Partial pack at {}", s.folder);
+                return ExitCode::FAILURE;
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
     let map = build_data_map(&inventory);
     print!("{}", render_text(&map));
 
