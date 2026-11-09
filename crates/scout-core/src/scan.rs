@@ -66,6 +66,8 @@ pub struct Inventory {
     pub assessment_id: String,
     /// Slack attachments found on disk, by Slack file ID, with item IDs.
     pub attachments: std::collections::BTreeMap<String, Vec<u64>>,
+    /// Slack messages seen so far, so overlapping exports count once.
+    pub slack_seen: crate::analyze::slack::SeenMessages,
 }
 
 struct Ctx {
@@ -87,6 +89,7 @@ struct Scanner<'p> {
     records_total: u64,
     limits_reached: BTreeSet<Reason>,
     attachments: std::collections::BTreeMap<String, Vec<u64>>,
+    slack_seen: crate::analyze::slack::SeenMessages,
 }
 
 /// Scans the selected files and folders. Reads only what was selected.
@@ -132,6 +135,7 @@ pub fn extend_scan(
         records_total: 0,
         limits_reached: BTreeSet::new(),
         attachments: Default::default(),
+        slack_seen: Default::default(),
     };
     if let Some(p) = prev {
         s.records_total = p.items.iter().filter_map(|i| i.records).sum();
@@ -141,6 +145,7 @@ pub fn extend_scan(
         s.text = p.text;
         s.limits_reached = p.limits_reached;
         s.attachments = p.attachments;
+        s.slack_seen = p.slack_seen;
         s.limits_reached.remove(&Reason::StoppedByUser);
     }
     for input in inputs {
@@ -193,6 +198,7 @@ pub fn extend_scan(
         cancelled,
         assessment_id,
         attachments: s.attachments,
+        slack_seen: s.slack_seen,
     }
 }
 
@@ -803,7 +809,12 @@ impl Scanner<'_> {
             }
         }
         if let Some(doc) = outcome.json.take() {
-            self.slack[ctx.collection as usize].offer(&ctx.path, &doc);
+            self.slack[ctx.collection as usize].offer(
+                &ctx.path,
+                &doc,
+                ctx.collection,
+                &mut self.slack_seen,
+            );
         }
         if let Some(n) = outcome.records {
             self.records_total += n;

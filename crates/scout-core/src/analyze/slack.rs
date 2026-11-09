@@ -8,7 +8,7 @@
 use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::OnceLock;
 
 /// Subtypes that represent membership or channel administration rather than
@@ -69,8 +69,21 @@ pub struct SlackInventory {
     pub first_message_unix: Option<i64>,
     pub last_message_unix: Option<i64>,
     /// Message records per calendar month (YYYY-MM), coarse by design.
+    /// Messages already counted in another export are left out, so months
+    /// can be summed across exports.
     pub monthly_activity: BTreeMap<String, u64>,
+    /// Message records also present in another export added earlier (for
+    /// example an older export of the same workspace).
+    pub records_also_in_other_exports: u64,
+    /// The same, by the collection they were first seen in. Local only.
+    #[serde(skip)]
+    pub overlap_by_collection: BTreeMap<u32, u64>,
 }
+
+/// Messages seen across every Slack export in an assessment, by channel and
+/// timestamp, with the collection each was first seen in. Lets overlapping
+/// exports of one workspace be counted once.
+pub type SeenMessages = HashMap<(String, String), u32>;
 
 #[derive(Default)]
 struct ExportState {
@@ -99,6 +112,7 @@ struct ExportState {
     first: Option<i64>,
     last: Option<i64>,
     monthly: BTreeMap<String, u64>,
+    overlap: BTreeMap<u32, u64>,
 }
 
 /// Accumulates Slack evidence across all JSON documents of one collection.
@@ -137,7 +151,9 @@ fn is_day_file(name: &str) -> bool {
 
 impl SlackRecogniser {
     /// Offers one parsed JSON document with its logical path ('/'-separated).
-    pub fn offer(&mut self, path: &str, doc: &Value) {
+    /// `collection` and `seen` let messages already counted in another
+    /// export be recognised.
+    pub fn offer(&mut self, path: &str, doc: &Value, collection: u32, seen: &mut SeenMessages) {
         let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
         let Some((&file, dirs)) = parts.split_last() else {
             return;
@@ -185,8 +201,10 @@ impl SlackRecogniser {
                 let st = self.exports.entry(root).or_default();
                 st.channel_folders.insert(channel.to_string());
                 for m in messages {
-                    let added = st.add_message(channel, m);
-                    if added.is_some() {
+                    let added = st.add_message(channel, m, collection, seen);
+                    // Content analysis counts each message once across exports.
+                    let first_seen = matches!(added, Some((_, true)));
+                    if first_seen {
                         // Links anywhere in the record: text, attachments, blocks.
                         self.sources.scan_text(&m.to_string(), 0);
                         let bot_name = m
@@ -198,7 +216,7 @@ impl SlackRecogniser {
                             self.sources.note_bot_message(name, 0);
                         }
                     }
-                    if added == Some(true) {
+                    if added == Some((true, true)) {
                         if let Some(text) = m.get("text").and_then(Value::as_str) {
                             // Mentions and links are <...> tokens; drop them.
                             let prose = super::language::strip_chat_code(text);
@@ -265,19 +283,34 @@ pub fn attachment_file_id(path: &str) -> Option<&str> {
 }
 
 impl ExportState {
-    /// Records one message. Returns None for a duplicate record, otherwise
-    /// whether the message was written by a person (not a bot or admin event).
-    fn add_message(&mut self, channel: &str, m: &Value) -> Option<bool> {
+    /// Records one message. Returns None for a duplicate record within this
+    /// export, otherwise whether the message was written by a person (not a
+    /// bot or admin event) and whether no other export had it already.
+    fn add_message(
+        &mut self,
+        channel: &str,
+        m: &Value,
+        collection: u32,
+        seen: &mut SeenMessages,
+    ) -> Option<(bool, bool)> {
         let obj = m.as_object()?;
         let ts = obj.get("ts").and_then(Value::as_str).unwrap_or("");
-        if !ts.is_empty()
-            && !self
-                .message_keys
-                .insert((channel.to_string(), ts.to_string()))
-        {
+        let key = (channel.to_string(), ts.to_string());
+        if !ts.is_empty() && !self.message_keys.insert(key.clone()) {
             return None; // duplicate record of the same message
         }
         self.message_records += 1;
+        let first_seen = ts.is_empty()
+            || match seen.entry(key) {
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    v.insert(collection);
+                    true
+                }
+                std::collections::hash_map::Entry::Occupied(o) => {
+                    *self.overlap.entry(*o.get()).or_default() += 1;
+                    false
+                }
+            };
 
         let subtype = obj.get("subtype").and_then(Value::as_str).unwrap_or("");
         let mut by_person = false;
@@ -296,7 +329,9 @@ impl ExportState {
         if let Some(secs) = ts.split('.').next().and_then(|s| s.parse::<i64>().ok()) {
             self.first = Some(self.first.map_or(secs, |f| f.min(secs)));
             self.last = Some(self.last.map_or(secs, |l| l.max(secs)));
-            *self.monthly.entry(month_key(secs)).or_default() += 1;
+            if first_seen {
+                *self.monthly.entry(month_key(secs)).or_default() += 1;
+            }
         }
 
         if let Some(tts) = obj.get("thread_ts").and_then(Value::as_str) {
@@ -346,7 +381,7 @@ impl ExportState {
             self.github_prs
                 .insert(format!("{}/{}/{}", &c[1], &c[2], &c[3]).to_ascii_lowercase());
         }
-        Some(by_person)
+        Some((by_person, first_seen))
     }
 
     fn inventory(&self) -> SlackInventory {
@@ -381,6 +416,8 @@ impl ExportState {
             first_message_unix: self.first,
             last_message_unix: self.last,
             monthly_activity: self.monthly.clone(),
+            records_also_in_other_exports: self.overlap.values().sum(),
+            overlap_by_collection: self.overlap.clone(),
         }
     }
 }
@@ -420,7 +457,13 @@ mod tests {
     #[test]
     fn classifies_messages() {
         let mut r = SlackRecogniser::default();
-        r.offer("export/channels.json", &json!([{"name": "general"}]));
+        let mut seen = SeenMessages::default();
+        r.offer(
+            "export/channels.json",
+            &json!([{"name": "general"}]),
+            0,
+            &mut seen,
+        );
         r.offer(
             "export/general/2024-01-02.json",
             &json!([
@@ -432,8 +475,7 @@ mod tests {
                 {"ts": "1704153900.000100", "subtype": "channel_join", "user": "U3"},
                 {"ts": "1704154000.000100", "user": "U2", "thread_ts": "1704000000.000000", "text": "orphan"},
                 {"ts": "1704153600.000100", "user": "U1", "text": "duplicate record"}
-            ]),
-        );
+            ]), 0, &mut seen);
         let inv = &r.inventories()[0];
         assert_eq!(inv.message_records, 5);
         assert_eq!(inv.participant_message_records, 3);

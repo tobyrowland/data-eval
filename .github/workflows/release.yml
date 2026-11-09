@@ -17,13 +17,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Windows x64 only for now. The macOS and Linux steps below are kept;
+        # add these back to build them again:
+        #   - os: macos-latest
+        #     name: macos-universal
+        #   - os: ubuntu-22.04
+        #     name: linux-x64
         include:
           - os: windows-latest
             name: windows-x64
-          - os: macos-latest
-            name: macos-universal
-          - os: ubuntu-22.04
-            name: linux-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -149,21 +151,18 @@ jobs:
           body: |
             Preview build of Working Minds, built from ${{ github.sha }}.
 
+            This preview is for Windows 10/11 (64-bit) only. macOS and Linux builds will return later.
+
             **Desktop app (recommended)**: drag in your exports and get a visual map of your data.
-            - Windows 10/11: `Working-Minds-Setup-windows-x64.exe` (or the `.msi`)
-            - macOS 14+ (Apple Silicon and Intel): `Working-Minds-macos-universal.dmg`
-            - Linux: `Working-Minds-linux-x64.AppImage` or `.deb`
+            - `Working-Minds-Setup-windows-x64.exe` (or the `.msi`)
 
             **Attachment Downloader (optional companion)**: fetches the files your Slack export links to, directly from Slack. It is the only Working Minds tool that connects to the internet, and it connects only to Slack.
-            - Windows: `Working-Minds-Attachment-Downloader-Setup-windows-x64.exe`
-            - macOS: `Working-Minds-Attachment-Downloader-macos-universal.dmg`
-            - Linux: `Working-Minds-Attachment-Downloader-linux-x64.AppImage` or `.deb`
+            - `Working-Minds-Attachment-Downloader-Setup-windows-x64.exe`
 
-            **Command-line tool (advanced)**: `Working-Minds-CLI-*` archives.
+            **Command-line tool (advanced)**: `Working-Minds-CLI-windows-x64.zip`.
 
-            This preview is not code-signed yet, so you will see a first-run warning.
-            - Windows: choose "More info", then "Run anyway".
-            - macOS: open the app once with right-click › Open, or allow it in System Settings › Privacy & Security.
+            This preview is not code-signed yet, so Windows shows a first-run warning: choose "More info", then "Run anyway".
+            If the installer says Working Minds is running, click OK to close it and continue.
 
             Everything runs on your computer. Nothing is uploaded.
           files: out/*

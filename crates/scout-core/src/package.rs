@@ -137,12 +137,17 @@ pub fn plan(inv: &Inventory) -> Plan {
         .map(|&id| inv.items[id as usize].collection)
         .collect();
 
+    let snapshots = crate::report::code_snapshots(inv);
     let mut entries = Vec::new();
     for c in &inv.collections {
         let t = &inv.text[c.id as usize];
         let (files, bytes, formats) = per.get(&c.id).cloned().unwrap_or_default();
         let is_dir = c.source.is_dir();
-        let display = crate::report::display_label_for(c, t);
+        let snapshot = snapshots.get(&c.id);
+        let display = match snapshot {
+            Some(snap) => snap.display_label(),
+            None => crate::report::display_label_for(c, t),
+        };
         let (kind, folders, action): (&'static str, Vec<String>, Action) =
             if c.source_kind == SourceKind::SlackExport {
                 (
@@ -182,6 +187,19 @@ pub fn plan(inv: &Inventory) -> Plan {
                     Action::CopyFile(c.source.clone())
                 };
                 ("Google Takeout", folders, action)
+            } else if let Some(snap) = snapshot {
+                (
+                    "Code download",
+                    vec![format!("Code/{}", snap.repo().replace('/', "-"))],
+                    if is_dir {
+                        Action::CopyDir {
+                            src: c.source.clone(),
+                            name: None,
+                        }
+                    } else {
+                        Action::CopyFile(c.source.clone())
+                    },
+                )
             } else if !t.git_remotes.is_empty() && is_dir {
                 let r = t.git_remotes.iter().next().unwrap();
                 let repo = r

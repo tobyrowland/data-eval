@@ -54,6 +54,7 @@
     if (attachTargets.has(c.label)) return { badge: "↓", color: "#22A094", kind: "Slack attachments", matched: attachTargets.get(c.label) };
     if ((c.display_label || "").startsWith("Google Takeout")) return { badge: "G", color: "#2F6FB0", kind: "Google Takeout" };
     if ((c.display_label || "").endsWith("(Git repository)")) return { badge: "‹›", color: "#5E6E84", kind: "Git repository" };
+    if ((c.display_label || "").endsWith("(code download)")) return { badge: "‹›", color: "#5E6E84", kind: "Code download" };
     const cat = dominantCategory(c);
     if (cat === "Email") return { badge: "@", color: CAT.Email, kind: "Email archive" };
     if ((c.formats || []).length === 1 && c.logical_files === 1) {
@@ -640,29 +641,27 @@
     const undoDone = (key) => () => { plan.done = plan.done.filter((k) => k !== key); save(); };
     const names = (labels) => labels.map((l) => displayOf(map, l)).join(", ");
 
-    // 1. Files the Slack export links to but doesn't contain.
+    // 1. Files the Slack exports link to but don't contain: one step for
+    // all exports together, each file counted once.
     const rels = map.relationships || [];
-    const byFrom = new Map();
-    rels.filter((r) => r.kind === "slack_images" || r.kind === "slack_files").forEach((r) => {
-      const e = byFrom.get(r.from) || { img: null, doc: null };
-      e[r.kind === "slack_images" ? "img" : "doc"] = r;
-      byFrom.set(r.from, e);
-    });
-    for (const [from, e] of byFrom) {
-      const total = (e.img ? e.img.count : 0) + (e.doc ? e.doc.count : 0);
-      const got = (e.img ? e.img.resolved : 0) + (e.doc ? e.doc.resolved : 0);
-      const key = "slack-files:" + from;
-      const part = (r, noun) => (r ? (r.resolved ? `${num(r.resolved)} of ${num(r.count)} ${noun}` : `${num(r.count)} ${noun}`) : null);
-      const what = [part(e.img, "images"), part(e.doc, "documents")].filter(Boolean).join(" and ");
+    const sf = map.slack_files;
+    if (sf && sf.images + sf.documents > 0) {
+      const total = sf.images + sf.documents;
+      const got = sf.images_found + sf.documents_found;
+      const key = "slack-files";
+      const part = (found, count, noun) => (count ? (found ? `${num(found)} of ${num(count)} ${noun}` : `${num(count)} ${noun}`) : null);
+      const what = [part(sf.images_found, sf.images, "images"), part(sf.documents_found, sf.documents, "documents")].filter(Boolean).join(" and ");
       const complete = got >= total;
       const manual = !complete && doneByHand.has(key);
+      const several = sf.exports.length > 1;
       items.push({
         key, done: complete || manual, manual,
         title: complete ? "Files shared in Slack: all in your map" : manual ? "Files shared in Slack: marked as done" : "Get the files shared in Slack",
         tag: "Slack",
-        evidence: got ? `${what} matched to messages` + (complete ? "" : `; ${num(total - got)} still missing`) : `${what} are linked from messages but not in the export`,
-        note: manual ? "You marked this as done. Files that could not be downloaded stay listed as missing on the map." : null,
-        from: [from], stat: complete ? total : total - got, statNoun: complete ? "files matched" : "files missing",
+        evidence: got ? `${what} matched to messages` + (complete ? "" : `; ${num(total - got)} still missing`) : `${what} are linked from messages but not in the export${several ? "s" : ""}`,
+        note: manual ? "You marked this as done. Files that could not be downloaded stay listed as missing on the map."
+          : several ? `Across your ${sf.exports.length} Slack exports, each file counted once. Running the Attachment Downloader on the export that covers the longest period usually gets them all.` : null,
+        from: sf.exports, stat: complete ? total : total - got, statNoun: complete ? "files matched" : "files missing",
         progress: total ? Math.round((got * 100) / total) : 0,
         actions: complete ? [] : manual ? [["Undo", undoDone(key), "ghost"]] : [["How to get these", () => handlers.onGuide("slack_images")], ["Mark as done", markDone(key), "ghost"]],
       });
@@ -671,7 +670,10 @@
     // 2. Sources the data refers to: open until their data is in the map.
     const shown = new Set();
     const addedIds = new Set(plan.added.map((a) => a.id).filter(Boolean));
-    sources.forEach((s) => {
+    // Ordered by how much the data points to each source, whether or not it
+    // is done, so ticking a step off doesn't move it.
+    const weight = (s) => (s.distinct_targets || 0) * 3 + (s.links || 0) + (s.bot_messages || 0) / 2;
+    sources.slice().sort((a, b) => weight(b) - weight(a)).forEach((s) => {
       const evidenced = s.links || s.app_installed || s.bot_messages;
       if (removed.has(s.id) && !s.in_selection) return;
       if (s.in_selection && !evidenced && !addedIds.has(s.id)) return; // a base source like Slack itself
@@ -682,9 +684,12 @@
         const found = `Found in ${names(s.collections)}`;
         let note = null;
         if (s.resolved_targets != null && s.distinct_targets) {
+          const others = s.other_repositories || 0;
           note = s.resolved_targets >= s.distinct_targets
             ? `All ${num(s.distinct_targets)} linked ${s.target_noun} are in the repositories you added.`
-            : `${num(s.resolved_targets)} of ${num(s.distinct_targets)} linked ${s.target_noun} are in the repositories you added; the rest point to repositories that aren't in your map yet.`;
+            : `${num(s.resolved_targets)} of ${num(s.distinct_targets)} linked ${s.target_noun} are in the repositories you added` +
+              (others ? `; the rest point to ${num(others)} other ${others === 1 ? "repository" : "repositories"} that aren't in your map yet.` : ".");
+          if (s.snapshot_only) note += " It was added as a download, so it has no commit history or pull requests; a clone (git clone) includes the history.";
         } else if (s.id === "google_drive" && s.links) {
           note = "Takeout names files by title rather than by the IDs in links, so we can't check which linked documents it includes.";
         }
@@ -756,8 +761,7 @@
           <div class="sp-text"><strong>${num(done.length)} of ${num(total)} done</strong><span>${open.length ? `${num(open.length)} still to add` : "Everything your data points to is accounted for"}</span></div>
           <div class="sp-bar"><span style="width:${pctDone}%"></span></div>
         </div>` : ""}
-        ${open.length ? open.map((it, i) => row(it, i + 1)).join("") : ""}
-        ${done.length ? `<div class="steps-divider">Done</div>${done.map((it) => row(it)).join("")}` : ""}
+        ${items.map((it, i) => row(it, i + 1)).join("")}
         ${!total ? `<div class="step empty"><div class="step-main"><div class="step-title">Nothing obvious to add</div><div class="step-evidence">Your data doesn't link to other systems we recognise. Use “Add a source” for anything we missed.</div></div></div>` : ""}
         ${other.length ? `<div class="step-other"><b>Also worth doing</b><ul>${other.map((o) => `<li>${esc(o)}</li>`).join("")}</ul></div>` : ""}
       </div>
