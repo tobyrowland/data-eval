@@ -641,29 +641,27 @@
     const undoDone = (key) => () => { plan.done = plan.done.filter((k) => k !== key); save(); };
     const names = (labels) => labels.map((l) => displayOf(map, l)).join(", ");
 
-    // 1. Files the Slack export links to but doesn't contain.
+    // 1. Files the Slack exports link to but don't contain: one step for
+    // all exports together, each file counted once.
     const rels = map.relationships || [];
-    const byFrom = new Map();
-    rels.filter((r) => r.kind === "slack_images" || r.kind === "slack_files").forEach((r) => {
-      const e = byFrom.get(r.from) || { img: null, doc: null };
-      e[r.kind === "slack_images" ? "img" : "doc"] = r;
-      byFrom.set(r.from, e);
-    });
-    for (const [from, e] of byFrom) {
-      const total = (e.img ? e.img.count : 0) + (e.doc ? e.doc.count : 0);
-      const got = (e.img ? e.img.resolved : 0) + (e.doc ? e.doc.resolved : 0);
-      const key = "slack-files:" + from;
-      const part = (r, noun) => (r ? (r.resolved ? `${num(r.resolved)} of ${num(r.count)} ${noun}` : `${num(r.count)} ${noun}`) : null);
-      const what = [part(e.img, "images"), part(e.doc, "documents")].filter(Boolean).join(" and ");
+    const sf = map.slack_files;
+    if (sf && sf.images + sf.documents > 0) {
+      const total = sf.images + sf.documents;
+      const got = sf.images_found + sf.documents_found;
+      const key = "slack-files";
+      const part = (found, count, noun) => (count ? (found ? `${num(found)} of ${num(count)} ${noun}` : `${num(count)} ${noun}`) : null);
+      const what = [part(sf.images_found, sf.images, "images"), part(sf.documents_found, sf.documents, "documents")].filter(Boolean).join(" and ");
       const complete = got >= total;
       const manual = !complete && doneByHand.has(key);
+      const several = sf.exports.length > 1;
       items.push({
         key, done: complete || manual, manual,
         title: complete ? "Files shared in Slack: all in your map" : manual ? "Files shared in Slack: marked as done" : "Get the files shared in Slack",
         tag: "Slack",
-        evidence: got ? `${what} matched to messages` + (complete ? "" : `; ${num(total - got)} still missing`) : `${what} are linked from messages but not in the export`,
-        note: manual ? "You marked this as done. Files that could not be downloaded stay listed as missing on the map." : null,
-        from: [from], stat: complete ? total : total - got, statNoun: complete ? "files matched" : "files missing",
+        evidence: got ? `${what} matched to messages` + (complete ? "" : `; ${num(total - got)} still missing`) : `${what} are linked from messages but not in the export${several ? "s" : ""}`,
+        note: manual ? "You marked this as done. Files that could not be downloaded stay listed as missing on the map."
+          : several ? `Across your ${sf.exports.length} Slack exports, each file counted once. Running the Attachment Downloader on the export that covers the longest period usually gets them all.` : null,
+        from: sf.exports, stat: complete ? total : total - got, statNoun: complete ? "files matched" : "files missing",
         progress: total ? Math.round((got * 100) / total) : 0,
         actions: complete ? [] : manual ? [["Undo", undoDone(key), "ghost"]] : [["How to get these", () => handlers.onGuide("slack_images")], ["Mark as done", markDone(key), "ghost"]],
       });

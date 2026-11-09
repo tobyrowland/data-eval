@@ -31,6 +31,8 @@ pub struct DataMap {
     pub preparation_priorities: Vec<String>,
     /// Links from collections to material they refer to, resolved or not.
     pub relationships: Vec<Relationship>,
+    /// Files linked from all Slack exports together, each counted once.
+    pub slack_files: Option<SlackFiles>,
     /// Content-derived activity per calendar month (YYYY-MM), all collections.
     pub activity: BTreeMap<String, u64>,
     pub stopped_by_user: bool,
@@ -198,6 +200,18 @@ pub struct Relationship {
     pub explanation: String,
 }
 
+/// Files referred to by every Slack export in the assessment, each counted
+/// once however many exports mention it, and how many are present.
+#[derive(Debug, Serialize)]
+pub struct SlackFiles {
+    pub images: u64,
+    pub images_found: u64,
+    pub documents: u64,
+    pub documents_found: u64,
+    /// The Slack exports these come from.
+    pub exports: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Privacy {
     pub statement: &'static str,
@@ -330,15 +344,38 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
                     a.channels_in_metadata += s.channels_in_metadata;
                     a.explicit_threads += s.explicit_threads;
                     a.distinct_file_references += s.distinct_file_references;
+                    a.records_also_in_other_exports += s.records_also_in_other_exports;
+                    for (&k, &v) in &s.overlap_by_collection {
+                        *a.overlap_by_collection.entry(k).or_default() += v;
+                    }
                     a
                 });
-                format!(
+                let mut text = format!(
                     "A Slack workspace export with {} across {}, including {}. It refers to {} not included in the export.",
                     plural(s.message_records, "message record", "message records"),
                     plural(s.channels_in_metadata, "channel", "channels"),
                     plural(s.explicit_threads, "thread", "threads"),
                     plural(s.distinct_file_references, "shared file", "shared files"),
-                )
+                );
+                if s.records_also_in_other_exports > 0 {
+                    let others: Vec<String> = s
+                        .overlap_by_collection
+                        .keys()
+                        .filter(|&&k| k != c.id)
+                        .map(|&k| inv.collections[k as usize].label.clone())
+                        .collect();
+                    let where_ = if others.is_empty() {
+                        "another export in this selection".to_string()
+                    } else {
+                        others.join(", ")
+                    };
+                    text.push_str(&format!(
+                        " {} of its messages are also in {}, so they are counted once.",
+                        group(s.records_also_in_other_exports),
+                        where_
+                    ));
+                }
+                text
             }
             SourceKind::Generic => format!(
                 "{} containing {}.",
@@ -569,6 +606,7 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
             .collect(),
         preparation_priorities: prep.into_iter().map(|p| p.1).collect(),
         relationships,
+        slack_files: slack_files(inv),
         activity,
         stopped_by_user: inv.cancelled,
         languages,
@@ -682,7 +720,8 @@ fn snapshot_stems(label: &str) -> Vec<String> {
 /// Collections that are code downloads of repositories the data links to.
 pub fn code_snapshots(inv: &Inventory) -> HashMap<u32, CodeSnapshot> {
     // Repositories linked to from anywhere in the assessment.
-    let mut repos: BTreeMap<String, &'static str> = BTreeMap::new();
+    // Repository -> (service, distinct linked pages in it).
+    let mut repos: BTreeMap<String, (&'static str, u64)> = BTreeMap::new();
     for c in &inv.collections {
         let i = c.id as usize;
         for tally in [&inv.slack[i].sources, &inv.text[i].sources] {
@@ -692,16 +731,34 @@ pub fn code_snapshots(inv: &Inventory) -> HashMap<u32, CodeSnapshot> {
                 }
                 for t in &st.targets {
                     if let Some(r) = repo_of_target(t) {
-                        repos.entry(r).or_insert(id);
+                        repos.entry(r).or_insert((id, 0)).1 += 1;
                     }
                 }
             }
         }
     }
+    // Collections holding at least one source-code file.
+    let mut has_code: BTreeSet<u32> = BTreeSet::new();
+    for it in &inv.items {
+        let ext = it
+            .local_path
+            .rsplit('/')
+            .next()
+            .and_then(|n| n.rsplit_once('.'))
+            .map(|(_, e)| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        if !ext.is_empty()
+            && !matches!(ext.as_str(), "json" | "csv" | "tsv" | "xml" | "txt" | "md")
+            && language::is_code_or_data_ext(&ext)
+        {
+            has_code.insert(it.collection);
+        }
+    }
     let mut out = HashMap::new();
     for c in &inv.collections {
         let t = &inv.text[c.id as usize];
-        if c.source_kind == SourceKind::SlackExport
+        if !has_code.contains(&c.id)
+            || c.source_kind == SourceKind::SlackExport
             || !t.git_remotes.is_empty()
             || !t.takeout_products.is_empty()
         {
@@ -718,9 +775,10 @@ pub fn code_snapshots(inv: &Inventory) -> HashMap<u32, CodeSnapshot> {
             })
             .or_else(|| {
                 // Otherwise the longest repository name the archive name is
-                // or ends with ("<anything>-<repo>"), if only one has it.
+                // or ends with ("<anything>-<repo>"); among forks of the same
+                // name, the one the data links to most.
                 let name = |r: &str| r.rsplit('/').next().unwrap_or("").to_string();
-                let hits: Vec<_> = repos
+                repos
                     .iter()
                     .filter(|(r, _)| {
                         let n = name(r);
@@ -728,15 +786,9 @@ pub fn code_snapshots(inv: &Inventory) -> HashMap<u32, CodeSnapshot> {
                             .iter()
                             .any(|s| *s == n || s.ends_with(&format!("-{n}")))
                     })
-                    .collect();
-                let best = hits.iter().map(|(r, _)| name(r).len()).max()?;
-                let mut top = hits.into_iter().filter(|(r, _)| name(r).len() == best);
-                match (top.next(), top.next()) {
-                    (Some(h), None) => Some(h),
-                    _ => None,
-                }
+                    .max_by_key(|(r, (_, pages))| (name(r).len(), *pages))
             });
-        if let Some((r, &service)) = found {
+        if let Some((r, &(service, _))) = found {
             out.insert(
                 c.id,
                 CodeSnapshot {
@@ -972,6 +1024,46 @@ fn language_summary(inv: &Inventory) -> LanguageSummary {
         code_or_data_words: all.non_prose_words,
         code_or_data_files: all.non_prose_files,
     }
+}
+
+fn slack_files(inv: &Inventory) -> Option<SlackFiles> {
+    let mut images = std::collections::HashSet::new();
+    let mut others = std::collections::HashSet::new();
+    let mut exports = Vec::new();
+    for c in &inv.collections {
+        if c.source_kind != SourceKind::SlackExport {
+            continue;
+        }
+        let (i, o) = inv.slack[c.id as usize].referenced_files();
+        if i.is_empty() && o.is_empty() {
+            continue;
+        }
+        exports.push(c.label.clone());
+        images.extend(i);
+        others.extend(o);
+    }
+    // A file another export shows as an image counts as an image.
+    others.retain(|id| !images.contains(id));
+    if exports.is_empty() {
+        return None;
+    }
+    let present = |id: &String| {
+        inv.attachments.get(id).is_some_and(|ids| {
+            ids.iter().any(|&i| {
+                !matches!(
+                    inv.items[i as usize].status,
+                    Status::Excluded | Status::Unavailable
+                )
+            })
+        })
+    };
+    Some(SlackFiles {
+        images: images.len() as u64,
+        images_found: images.iter().filter(|id| present(id)).count() as u64,
+        documents: others.len() as u64,
+        documents_found: others.iter().filter(|id| present(id)).count() as u64,
+        exports,
+    })
 }
 
 fn relationships(inv: &Inventory, collections: &[CollectionSummary]) -> Vec<Relationship> {

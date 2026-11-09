@@ -561,3 +561,82 @@ fn code_downloads_are_matched_to_linked_repositories() {
         .unwrap();
     assert_eq!(e.folders, vec!["Code/cranq-cranq-platform".to_string()]);
 }
+
+#[test]
+fn overlapping_exports_of_one_workspace_count_once() {
+    let d = tempdir("overlap");
+    let msg = |ts: &str, text: &str, file: Option<&str>| {
+        let mut m = json!({"ts": ts, "user": "U1", "text": text});
+        if let Some(f) = file {
+            m["files"] = json!([{"id": f, "mimetype": "image/png", "url_private": "https://files.slack.com/x"}]);
+        }
+        m
+    };
+    let export = |msgs: Vec<serde_json::Value>| {
+        zip_bytes(&[
+            (
+                "channels.json",
+                json!([{"name": "eng"}]).to_string().as_bytes(),
+            ),
+            ("users.json", b"[]"),
+            ("eng/2021-01-01.json", json!(msgs).to_string().as_bytes()),
+        ])
+    };
+    // The older export holds two messages; the newer one has both plus one.
+    let a = msg(
+        "1609459200.000100",
+        "see https://github.com/acme/app/pull/1",
+        Some("FAAAAAAAA01"),
+    );
+    let b = msg("1609459300.000100", "hello there", None);
+    let c = msg(
+        "1609459400.000100",
+        "new https://github.com/acme/app/pull/2",
+        Some("FAAAAAAAA02"),
+    );
+    write(&d, "old.zip", &export(vec![a.clone(), b.clone()]));
+    write(&d, "new.zip", &export(vec![a, b, c]));
+
+    let inv = scan(
+        &[d.join("old.zip"), d.join("new.zip")],
+        ScanOptions::default(),
+    );
+    let map = build_data_map(&inv);
+    let activity: u64 = map.activity.values().sum();
+    assert_eq!(activity, 3, "each message counted once in activity");
+    let new = map
+        .collections
+        .iter()
+        .find(|c| c.label == "new.zip")
+        .unwrap();
+    assert_eq!(
+        new.slack[0].message_records, 3,
+        "the export's own count is kept"
+    );
+    assert_eq!(new.slack[0].records_also_in_other_exports, 2);
+    assert!(
+        new.explanation
+            .contains("2 of its messages are also in old.zip"),
+        "{}",
+        new.explanation
+    );
+    let gh = map.sources.iter().find(|s| s.id == "github").unwrap();
+    assert_eq!(gh.links, 2, "links in shared messages counted once");
+    let sf = map.slack_files.as_ref().unwrap();
+    assert_eq!((sf.images, sf.documents), (2, 0), "files counted once");
+    assert_eq!(
+        sf.exports,
+        vec!["old.zip".to_string(), "new.zip".to_string()]
+    );
+
+    // Adding the newer export later gives the same result.
+    let first = scan(&[d.join("old.zip")], ScanOptions::default());
+    let more = scout_core::extend_scan(
+        Some(first),
+        &[d.join("new.zip")],
+        ScanOptions::default(),
+        &mut |_| {},
+    );
+    let map2 = build_data_map(&more);
+    assert_eq!(map2.activity.values().sum::<u64>(), 3);
+}
