@@ -9,7 +9,7 @@
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-pub const METHOD: &str = "whatlang 0.18 trigram detector, run locally on this computer, on prose only: code and data files (such as .js, .json, .csv, .log) are skipped, and passages that read like code, logs or placeholder text are set aside. Segments of 60+ letters take the detector's top language, 20 to 59 letters need a confident result, and anything shorter is left undetermined";
+pub const METHOD: &str = "whatlang 0.18 trigram detector, run locally on this computer, on prose only: code and data files (such as .js, .json, .csv, .log) are skipped, and passages that read like code, logs or placeholder text are set aside. Segments of 60+ letters take the detector's top language, 20 to 59 letters need a confident result, and anything shorter is left undetermined. Closely related pairs (Danish/Norwegian, Czech/Slovak, Croatian/Serbian) are reported together when they can't be told apart, and Chinese, Japanese and Thai are counted at two characters per word";
 
 /// Segments with fewer letters than this are not classified.
 const MIN_LETTERS: usize = 20;
@@ -41,7 +41,7 @@ pub struct LanguageTally {
 impl LanguageTally {
     /// Classifies one short unit of text, such as a chat message.
     pub fn add_segment(&mut self, text: &str) {
-        let words = text.split_whitespace().count() as u64;
+        let words = word_count(text);
         if words == 0 {
             return;
         }
@@ -60,7 +60,7 @@ impl LanguageTally {
         };
         match detected {
             Some(info) => {
-                let e = self.by_code.entry(info.lang().code()).or_default();
+                let e = self.by_code.entry(group_code(&info, text)).or_default();
                 e.0 += words;
                 e.1 += 1;
             }
@@ -167,7 +167,63 @@ pub fn pct(part: u64, total: u64) -> f64 {
     }
 }
 
+/// Closely related languages the detector often confuses. When it isn't
+/// confident, the pair is reported together rather than guessed.
+fn group_code(info: &whatlang::Info, text: &str) -> &'static str {
+    use whatlang::Lang::*;
+    let unsure = info.confidence() < 0.5;
+    match info.lang() {
+        // Czech and Slovak each use letters the other doesn't; the detector's
+        // confidence alone is not enough to tell them apart.
+        Ces | Slk => {
+            let czech = text.chars().any(|c| "řůěŘŮĚ".contains(c));
+            let slovak = text.chars().any(|c| "ľĺŕôäĽĹŔÔÄ".contains(c));
+            match (czech, slovak) {
+                (true, false) => "ces",
+                (false, true) => "slk",
+                _ => "ces+slk",
+            }
+        }
+        Dan | Nob if unsure => "dan+nob",
+        Hrv | Srp if unsure => "hrv+srp",
+        l => l.code(),
+    }
+}
+
+/// Scripts written without spaces between words (Chinese, Japanese, Thai,
+/// Lao, Khmer, Burmese).
+fn is_unspaced(c: char) -> bool {
+    matches!(c,
+        '\u{3040}'..='\u{30ff}' | '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}'
+        | '\u{0e00}'..='\u{0eff}' | '\u{1780}'..='\u{17ff}' | '\u{1000}'..='\u{109f}')
+}
+
+/// Words, counting text in unspaced scripts as one word per two characters,
+/// a common approximation, so Chinese or Japanese isn't undercounted.
+pub fn word_count(text: &str) -> u64 {
+    let mut words = 0u64;
+    let mut unspaced = 0u64;
+    for tok in text.split_whitespace() {
+        let n = tok.chars().filter(|&c| is_unspaced(c)).count() as u64;
+        if n > 0 {
+            unspaced += n;
+            if tok.chars().any(|c| c.is_alphabetic() && !is_unspaced(c)) {
+                words += 1;
+            }
+        } else {
+            words += 1;
+        }
+    }
+    words + unspaced.div_ceil(2)
+}
+
 fn name_of(code: &str) -> &'static str {
+    match code {
+        "dan+nob" => return "Danish or Norwegian",
+        "ces+slk" => return "Czech or Slovak",
+        "hrv+srp" => return "Croatian or Serbian",
+        _ => {}
+    }
     whatlang::Lang::from_code(code)
         .map(|l| l.eng_name())
         .unwrap_or("Unknown")
@@ -198,13 +254,19 @@ pub fn looks_like_prose(text: &str) -> bool {
         return false;
     }
     let tokens: Vec<&str> = text.split_whitespace().collect();
+    // A token is word-like when it is mostly letters once surrounding
+    // punctuation (in any script, e.g. "。" or "«") is removed.
     let wordlike = tokens
         .iter()
         .filter(|t| {
-            let t = t.trim_matches(|c: char| ".,!?;:'\"()«»„“”‘’–—-".contains(c));
-            !t.is_empty()
+            let t = t.trim_matches(|c: char| !c.is_alphanumeric());
+            let n = t.chars().count();
+            n > 0
                 && t.chars()
-                    .all(|c| c.is_alphabetic() || c == '\'' || c == '’' || c == '-')
+                    .filter(|c| c.is_alphabetic() || *c == '\'' || *c == '’' || *c == '-')
+                    .count()
+                    * 100
+                    >= n * 80
         })
         .count();
     letters * 100 >= visible * 70
@@ -420,6 +482,39 @@ mod tests {
             "{:?}",
             t.by_code
         );
+    }
+
+    #[test]
+    fn unspaced_scripts_and_close_pairs() {
+        let mut t = LanguageTally::default();
+        t.add_segment("客户要求我们下周把最终报价和合同一起发过去。我们会尽快准备好所有的文件。");
+        t.add_segment("顧客から来週、最終見積もりと契約書を一緒に送るよう依頼がありました。");
+        t.add_segment(
+            "Hvordan går det med prosjektet? Vi må levere rapporten til kunden før fredag.",
+        );
+        t.add_segment(
+            "Klient požiadal, aby sme budúci týždeň poslali konečnú ponuku spolu so zmluvou.",
+        );
+        let rows = t.rows();
+        let get = |c: &str| {
+            rows.iter()
+                .find(|r| r.code == c)
+                .map(|r| (r.words, r.language))
+        };
+        assert!(get("cmn").is_some_and(|(w, _)| w >= 15), "{rows:?}");
+        assert!(get("jpn").is_some(), "{rows:?}");
+        assert_eq!(
+            get("dan+nob").map(|x| x.1),
+            Some("Danish or Norwegian"),
+            "{rows:?}"
+        );
+        assert_eq!(
+            get("ces+slk").map(|x| x.1),
+            Some("Czech or Slovak"),
+            "{rows:?}"
+        );
+        assert_eq!(t.non_prose_segments, 0);
+        assert_eq!(word_count("hello 世界和平 world"), 4);
     }
 
     #[test]
