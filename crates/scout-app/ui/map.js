@@ -418,6 +418,7 @@
         <div class="actions">
           <button class="btn ghost" data-act="restart">Start again</button>
           <button class="btn secondary" data-act="adddata"><span aria-hidden="true">＋</span> Add data</button>
+          <button class="btn secondary" data-act="pack">Create data pack</button>
           <button class="btn primary" data-act="save">Save my data map</button>
         </div>
       </div>
@@ -535,7 +536,8 @@
         </tr>`;
       const overall = top.map((r) => row(r.language, colorOf[r.code], r.words, r.share_percent)).join("")
         + (otherWords ? row(`${l.rows.length - 6} other languages`, "#AEB8C6", otherWords, pctOf(otherWords)) : "")
-        + (l.undetermined_words ? row("Too short to tell", "#DDE3EA", l.undetermined_words, l.undetermined_percent, "short replies, links, emoji") : "");
+        + (l.undetermined_words ? row("Too short to tell", "#DDE3EA", l.undetermined_words, l.undetermined_percent, "short replies, links, emoji") : "")
+        + (l.code_or_data_words ? `<tr class="aside-row"><td><span class="lang-dot" style="background:#C9D3DF"></span>Code, data or placeholder text <span class="muted small">set aside, not counted</span></td><td class="num">${num(l.code_or_data_words)}</td><td class="share muted small">not part of the shares</td></tr>` : "");
 
       // by-collection matrix: one column per top language, then other and undetermined
       const cols = top.slice(0, 3);
@@ -545,17 +547,26 @@
           return `<td class="num">${w ? `${p < 1 ? "<1" : p}%` : "—"}</td>`;
         };
         const known = new Set(cols.map((x) => x.code));
-        const other = c.rows.filter((r) => !known.has(r.code)).reduce((a, r) => a + r.words, 0);
-        return `<tr><td class="coll" title="${esc(c.label)}">${esc(c.label)}<span class="muted small">${num(c.words_examined)} words · ${esc(c.basis)}</span></td>
+        const others = c.rows.filter((r) => !known.has(r.code));
+        const other = others.reduce((a, r) => a + r.words, 0);
+        // Name the biggest language hiding in "Other", e.g. Hungarian.
+        const otherCell = () => {
+          if (!other) return `<td class="num">—</td>`;
+          const p = c.words_examined ? Math.round((other * 100) / c.words_examined) : 0;
+          const top = others[0];
+          return `<td class="num">${p < 1 ? "<1" : p}%${top ? `<span class="other-lang">mostly ${esc(top.language)}</span>` : ""}</td>`;
+        };
+        return `<tr><td class="coll" title="${esc(c.label)}">${esc(displayOf(map, c.label))}<span class="muted small">${num(c.words_examined)} words of prose · ${esc(c.basis)}</span></td>
           ${cols.map((x) => cell((c.rows.find((r) => r.code === x.code) || {}).words || 0)).join("")}
-          ${cell(other)}${cell(c.undetermined_words)}</tr>`;
+          ${otherCell()}${cell(c.undetermined_words)}</tr>`;
       }).join("");
 
       const en = l.english_percent;
       const notes = [];
       if (l.unreadable_documents) notes.push(`${num(l.unreadable_documents)} PDF and Office ${l.unreadable_documents === 1 ? "document is" : "documents are"} not included yet: reading their text arrives in a later release`);
       if (l.sampled_documents) notes.push(`${num(l.sampled_documents)} long ${l.sampled_documents === 1 ? "document was" : "documents were"} sampled from the start (first 256 KB)`);
-      notes.push("Slack bot and integration messages are left out, so the mix reflects what people wrote");
+      if (l.code_or_data_files) notes.push(`${num(l.code_or_data_files)} code and data files (such as .js, .json, .csv and .log) were skipped`);
+      notes.push("Slack bot and integration messages, code blocks and emoji codes are left out, so the mix reflects what people wrote");
       return `<div class="card lang-card">
         <div class="card-head"><div><h3>Languages</h3><p>Apparent language of the readable text, measured in words</p></div>
           ${en != null ? `<div class="lang-headline"><strong>${en}%</strong><span>of the readable text<br>is in English</span></div>` : ""}</div>
@@ -599,6 +610,7 @@
     });
     root.querySelector('[data-act="save"]').onclick = handlers.onSave;
     root.querySelector('[data-act="restart"]').onclick = handlers.onRestart;
+    root.querySelector('[data-act="pack"]').onclick = handlers.onPack;
     root.querySelectorAll('[data-act="adddata"]').forEach((b) => (b.onclick = () => handlers.onAddData(b)));
     const steps = root.querySelector("#next-steps");
     const redraw = () => renderNextSteps(steps, map, plan, handlers, redraw);

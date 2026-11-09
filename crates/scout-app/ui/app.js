@@ -241,6 +241,7 @@
       onRestart: async () => { await invoke("forget_session"); selections = []; currentMap = null; renderSelection(); show("screen-add"); },
       onAddData: (btn) => addDataMenu(btn),
       onGuide: (kind) => openGuide(kind),
+      onPack: () => openPack(),
       onPlan: (p) => invoke("set_source_plan", { plan: p }).catch((e) => toast("Could not save your list: " + e)),
     }, { banner, plan });
   }
@@ -327,6 +328,67 @@
   }
   $("guide-close").onclick = () => panel(false);
 
+  // ---------------------------------------------------------------- data pack
+  let packDest = null, packing = false;
+  async function openPack() {
+    let plan;
+    try { plan = await invoke("package_plan"); } catch (e) { toast(String(e)); return; }
+    const byFolder = new Map();
+    plan.entries.forEach((e) => e.folders.forEach((f) => {
+      const x = byFolder.get(f) || { from: [], files: 0, bytes: 0 };
+      x.from.push(e.collection); x.files += e.folders.length > 1 ? 0 : e.files; x.bytes += e.folders.length > 1 ? 0 : e.bytes;
+      byFolder.set(f, x);
+    }));
+    const rows = [...byFolder.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([f, x]) =>
+      `<tr><td><span class="folder-ico">▸</span><b>${esc(f)}/</b></td><td class="muted">${esc(x.from.join("; "))}</td></tr>`).join("");
+    $("pack-body").innerHTML = `
+      <p class="eyebrow">Create data pack</p>
+      <h2>One folder, tidy names, ready to share</h2>
+      <p>Working Minds copies everything you added into a new folder with standard names, ready to put on a drive. Google Takeout parts are unpacked and merged by product. Your originals aren't changed and nothing is uploaded.</p>
+      <table class="tbl compact pack-tbl"><thead><tr><th>Folder in the pack</th><th>From</th></tr></thead><tbody>${rows}</tbody></table>
+      <p class="muted small">About ${num(plan.total_files)} files, ${bytes(plan.total_bytes)}${plan.excluded_files ? ` · ${num(plan.excluded_files)} files you excluded are left out` : ""}. Includes a README explaining the layout.</p>
+      <div class="guide-callout"><b>This folder contains your actual data</b><br>Messages, documents, email and code are copied as they are. Only share it under an agreement you're happy with.</div>
+      <div class="card dest-row"><div><div class="dest-label">Create it in</div><div class="dest-path" id="pack-dest">${packDest ? esc(packDest) : "No folder chosen yet"}</div></div><button class="btn ghost small" id="pack-pick">Choose folder…</button></div>
+      <div id="pack-progress" hidden>
+        <div class="bar"><span id="pack-bar"></span></div>
+        <p class="muted small" id="pack-status">Starting…</p>
+      </div>
+      <div class="actions-row"><span></span><div><button class="btn ghost" id="pack-stop" hidden>Stop</button> <button class="btn primary" id="pack-go" ${packDest ? "" : "disabled"}>Create data pack</button></div></div>`;
+    $("pack-panel").setAttribute("aria-hidden", "false");
+    $("scrim").classList.add("on");
+    $("pack-pick").onclick = async () => {
+      const p = await invoke("pick_package_dest");
+      if (p) { packDest = p; $("pack-dest").textContent = p; $("pack-go").disabled = false; }
+    };
+    $("pack-go").onclick = async () => {
+      if (!packDest || packing) return;
+      packing = true;
+      $("pack-go").disabled = true; $("pack-pick").disabled = true;
+      $("pack-progress").hidden = false; $("pack-stop").hidden = false;
+      try {
+        const s = await invoke("build_package", { dest: packDest });
+        const ok = !s.error && !s.stopped;
+        $("pack-bar").style.width = ok ? "100%" : $("pack-bar").style.width;
+        $("pack-status").innerHTML = ok
+          ? `<b>Your data pack is ready.</b> ${num(s.files_copied)} files, ${bytes(s.bytes_copied)}.${s.skipped_unsafe ? ` ${num(s.skipped_unsafe)} unsafe archive entries were skipped.` : ""}`
+          : s.stopped ? "Stopped. The folder has what was copied so far, and its README says it is incomplete."
+          : `Copying stopped: ${esc(s.error)}. The folder has what was copied so far.`;
+        $("pack-stop").hidden = true;
+        $("pack-go").outerHTML = `<button class="btn primary" id="pack-show">Show folder</button>`;
+        $("pack-show").onclick = () => invoke("reveal", { path: s.folder });
+      } catch (e) { toast("Could not create the pack: " + e); }
+      packing = false;
+    };
+    $("pack-stop").onclick = async () => { $("pack-stop").disabled = true; $("pack-stop").textContent = "Stopping…"; await invoke("stop"); };
+  }
+  listen("scout://package", (e) => {
+    const p = e.payload;
+    const share = p.total_bytes ? Math.min(100, (p.bytes_copied * 100) / p.total_bytes) : 0;
+    $("pack-bar").style.width = share + "%";
+    $("pack-status").textContent = `${num(p.files_copied)} files copied · ${bytes(p.bytes_copied)} of about ${bytes(p.total_bytes)} · ${p.current}`;
+  });
+  $("pack-close").onclick = () => panel(false);
+
   // ---------------------------------------------------------------- chrome
   let toastTimer;
   function toast(msg, action) {
@@ -340,6 +402,7 @@
   function panel(open) {
     $("privacy-panel").setAttribute("aria-hidden", String(!open));
     if (!open) $("guide-panel").setAttribute("aria-hidden", "true");
+    if (!open && !packing) $("pack-panel").setAttribute("aria-hidden", "true");
     $("scrim").classList.toggle("on", open);
   }
   $("privacy-open").onclick = () => panel(true);

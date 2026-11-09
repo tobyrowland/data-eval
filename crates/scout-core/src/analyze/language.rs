@@ -9,7 +9,7 @@
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-pub const METHOD: &str = "whatlang 0.18 trigram detector, run locally on this computer; segments of 60+ letters take the detector's top language, 20 to 59 letters need a confident result, and anything shorter or ambiguous is left undetermined";
+pub const METHOD: &str = "whatlang 0.18 trigram detector, run locally on this computer, on prose only: code and data files (such as .js, .json, .csv, .log) are skipped, and passages that read like code, logs or placeholder text are set aside. Segments of 60+ letters take the detector's top language, 20 to 59 letters need a confident result, and anything shorter is left undetermined";
 
 /// Segments with fewer letters than this are not classified.
 const MIN_LETTERS: usize = 20;
@@ -28,6 +28,12 @@ pub struct LanguageTally {
     pub by_code: BTreeMap<&'static str, (u64, u64)>,
     pub undetermined_words: u64,
     pub undetermined_segments: u64,
+    /// Text that isn't prose: code, logs, data or placeholder text. Left out
+    /// of the language shares rather than being misread as a language.
+    pub non_prose_words: u64,
+    pub non_prose_segments: u64,
+    /// Files skipped because their type is code or data (e.g. .js, .csv).
+    pub non_prose_files: u64,
     /// Documents whose text was sampled rather than read in full.
     pub sampled_documents: u64,
 }
@@ -40,6 +46,11 @@ impl LanguageTally {
             return;
         }
         let letters = text.chars().filter(|c| c.is_alphabetic()).count();
+        if letters >= MIN_LETTERS && (!looks_like_prose(text) || is_placeholder(text)) {
+            self.non_prose_words += words;
+            self.non_prose_segments += 1;
+            return;
+        }
         let detected = if letters >= SENTENCE_LETTERS {
             whatlang::detect(text)
         } else if letters >= MIN_LETTERS {
@@ -109,6 +120,9 @@ impl LanguageTally {
         }
         self.undetermined_words += other.undetermined_words;
         self.undetermined_segments += other.undetermined_segments;
+        self.non_prose_words += other.non_prose_words;
+        self.non_prose_segments += other.non_prose_segments;
+        self.non_prose_files += other.non_prose_files;
         self.sampled_documents += other.sampled_documents;
     }
 
@@ -157,6 +171,168 @@ fn name_of(code: &str) -> &'static str {
     whatlang::Lang::from_code(code)
         .map(|l| l.eng_name())
         .unwrap_or("Unknown")
+}
+
+/// Whether text reads like human prose rather than code, logs or data.
+/// Code tokens look like Latin, Danish or Catalan to a trigram detector,
+/// so anything that fails this is set aside instead of being classified.
+pub fn looks_like_prose(text: &str) -> bool {
+    let mut visible = 0usize;
+    let mut letters = 0usize;
+    let mut code_marks = 0usize;
+    let mut digits = 0usize;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            continue;
+        }
+        visible += 1;
+        if c.is_alphabetic() {
+            letters += 1;
+        } else if c.is_ascii_digit() {
+            digits += 1;
+        } else if "{}[]()<>;=_/\\|#*`$@&^~+".contains(c) {
+            code_marks += 1;
+        }
+    }
+    if visible == 0 {
+        return false;
+    }
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let wordlike = tokens
+        .iter()
+        .filter(|t| {
+            let t = t.trim_matches(|c: char| ".,!?;:'\"()«»„“”‘’–—-".contains(c));
+            !t.is_empty()
+                && t.chars()
+                    .all(|c| c.is_alphabetic() || c == '\'' || c == '’' || c == '-')
+        })
+        .count();
+    letters * 100 >= visible * 70
+        && code_marks * 100 <= visible * 4
+        && digits * 100 <= visible * 15
+        && wordlike * 100 >= tokens.len().max(1) * 60
+}
+
+/// "Lorem ipsum" placeholder text, which the detector would call Latin.
+pub fn is_placeholder(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    t.contains("lorem ipsum") || t.contains("dolor sit amet")
+}
+
+/// File types that hold code or data rather than prose.
+pub fn is_code_or_data_ext(ext: &str) -> bool {
+    matches!(
+        ext,
+        "js" | "mjs"
+            | "cjs"
+            | "ts"
+            | "tsx"
+            | "jsx"
+            | "py"
+            | "rb"
+            | "php"
+            | "java"
+            | "kt"
+            | "kts"
+            | "scala"
+            | "go"
+            | "rs"
+            | "c"
+            | "h"
+            | "cc"
+            | "cpp"
+            | "hpp"
+            | "cs"
+            | "swift"
+            | "m"
+            | "mm"
+            | "dart"
+            | "lua"
+            | "r"
+            | "pl"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "ps1"
+            | "bat"
+            | "cmd"
+            | "sql"
+            | "graphql"
+            | "proto"
+            | "vue"
+            | "svelte"
+            | "css"
+            | "scss"
+            | "sass"
+            | "less"
+            | "json"
+            | "jsonl"
+            | "ndjson"
+            | "yml"
+            | "yaml"
+            | "toml"
+            | "ini"
+            | "cfg"
+            | "conf"
+            | "env"
+            | "properties"
+            | "lock"
+            | "gradle"
+            | "xml"
+            | "svg"
+            | "plist"
+            | "csv"
+            | "tsv"
+            | "log"
+            | "map"
+            | "ipynb"
+            | "tf"
+            | "hcl"
+            | "dockerfile"
+            | "makefile"
+            | "cmake"
+            | "gitignore"
+            | "gitattributes"
+            | "editorconfig"
+            | "pem"
+            | "crt"
+            | "key"
+    )
+}
+
+/// Removes code blocks, inline code and :emoji: shortcodes from a chat
+/// message so only the prose is classified.
+pub fn strip_chat_code(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    // ```fenced``` blocks
+    while let Some(start) = rest.find("```") {
+        out.push_str(&rest[..start]);
+        match rest[start + 3..].find("```") {
+            Some(end) => rest = &rest[start + 3 + end + 3..],
+            None => {
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    // `inline code`
+    let mut cleaned = String::with_capacity(out.len());
+    let mut in_code = false;
+    for c in out.chars() {
+        if c == '`' {
+            in_code = !in_code;
+            cleaned.push(' ');
+        } else if !in_code {
+            cleaned.push(c);
+        }
+    }
+    // :emoji_shortcodes:
+    cleaned
+        .split_whitespace()
+        .filter(|w| !(w.len() > 2 && w.starts_with(':') && w.ends_with(':')))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Removes markup so tags and attributes don't skew detection.
@@ -216,6 +392,41 @@ mod tests {
         assert_eq!(
             rows.iter().find(|r| r.code == "eng").unwrap().language,
             "English"
+        );
+    }
+
+    #[test]
+    fn code_logs_data_and_placeholders_are_not_languages() {
+        let mut t = LanguageTally::default();
+        t.add_segment(
+            "function updateUser(id, data) { return db.users.update({ where: { id }, data }); }",
+        );
+        t.add_segment("const result = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } });");
+        t.add_segment("2024-03-01 12:00:01 INFO server started on port 8080 pid=1234 env=production region=eu-west-1");
+        t.add_segment("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore");
+        assert!(t.by_code.is_empty(), "{:?}", t.by_code);
+        assert_eq!(t.non_prose_segments, 4);
+    }
+
+    #[test]
+    fn hungarian_is_recognised() {
+        let mut t = LanguageTally::default();
+        t.add_segment("Szia, meg tudnád nézni, hogy miért nem működik a fizetési rendszer a tegnapi frissítés óta?");
+        t.add_segment("A megrendelő azt kérte, hogy a jövő héten küldjük el a végleges ajánlatot és a szerződést.");
+        t.add_segment(&strip_chat_code("Köszönöm, holnap reggel átnézem a dokumentumot :thumbsup: ```let x = 1;``` és visszajelzek a csapatnak."));
+        assert_eq!(
+            t.by_code.get("hun").map(|v| v.1),
+            Some(3),
+            "{:?}",
+            t.by_code
+        );
+    }
+
+    #[test]
+    fn chat_code_is_stripped() {
+        assert_eq!(
+            strip_chat_code("fix: ```\nfn main() {}\n``` done :tada: see `foo()` now"),
+            "fix: done see now"
         );
     }
 

@@ -775,7 +775,22 @@ impl Scanner<'_> {
             self.text[ctx.collection as usize]
                 .sources
                 .scan_text(&sample, ctx.collection);
+            let ext = crate::detect::extension(&ctx.path);
+            let base = ctx
+                .path
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let code_or_data = crate::analyze::language::is_code_or_data_ext(&ext)
+                || crate::analyze::language::is_code_or_data_ext(&base)
+                || ctx.path.contains("/.git/")
+                || ctx.path.contains("/node_modules/");
+            if code_or_data {
+                self.text[ctx.collection as usize].languages.non_prose_files += 1;
+            }
             let text = match format {
+                _ if code_or_data => None,
                 Format::Html => Some(strip_markup(&sample)),
                 Format::Mbox | Format::Eml => Some(strip_mail_headers(&sample)),
                 Format::PlainText | Format::Markdown => Some(sample),

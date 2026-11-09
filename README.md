@@ -86,6 +86,31 @@ not code-signed yet, so Windows and macOS show a first-run warning.
 3. **Analysis:** collections, coverage, file formats and languages tables,
    plus activity over time.
 
+### Create data pack
+
+*Create data pack* copies everything you added into one new folder with
+standard names, ready to put on a drive:
+
+| Source | Folder in the pack |
+|---|---|
+| Slack exports | `Slack/` |
+| Downloaded Slack attachments | `Slack/Attachments/` |
+| Google Takeout (all parts unpacked and merged by product) | `Google Drive/`, `Google Mail/`, … |
+| Mailboxes | `Email/` |
+| Git repositories, with history | `Code/<owner-repo>/` |
+| Everything else | `Documents/` or `Other/` |
+
+- **Originals are never changed.** Anything you excluded is left out.
+- **Safe copying:** symbolic links aren't followed, and archive entries that
+  try to escape their folder are skipped and counted.
+- **What's included:** a `README.txt` describing the layout (and that the
+  folder holds real data) and a JSON manifest (counts only).
+- **The CLI does the same:**
+
+  ```bash
+  working-minds pack <inputs> --out <folder>
+  ```
+
 ### Making the data more complete
 
 The map's **Make your data more complete** card lists material your data
@@ -180,6 +205,11 @@ is counted as *Excluded* and its contents are not read.
   messages are left out), plus text, Markdown, HTML and email bodies (up to
   256 KB sampled per document). The result is a table in the app and the CLI,
   with a breakdown per collection.
+  - **Prose only:** code and data files (`.js`, `.json`, `.csv`, `.log` and
+    so on) are skipped. Passages that read like code, logs or "lorem ipsum"
+    placeholder text are set aside and reported separately, so they are never
+    misread as Latin, Danish or Catalan. Slack code blocks and `:emoji:` codes
+    are removed first.
   - **Method:** `whatlang`'s trigram detector, run locally. Paragraphs of 60+
     letters take the top language; 20–59 letters need a confident result;
     anything shorter is reported as "too short to tell", not guessed. Channel

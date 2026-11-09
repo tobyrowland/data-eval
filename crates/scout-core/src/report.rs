@@ -159,6 +159,10 @@ pub struct LanguageSummary {
     pub unreadable_documents: u64,
     /// Media and binary files, which carry no readable text.
     pub non_text_files: u64,
+    /// Words in code, logs, data or placeholder text, left out of the shares.
+    pub code_or_data_words: u64,
+    /// Files skipped as code or data by their type (e.g. .js, .csv, .log).
+    pub code_or_data_files: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -168,6 +172,7 @@ pub struct CollectionLanguages {
     pub basis: &'static str,
     pub words_examined: u64,
     pub undetermined_words: u64,
+    pub code_or_data_words: u64,
     pub rows: Vec<LanguageRow>,
 }
 
@@ -337,7 +342,7 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
             ),
         };
         collections.push(CollectionSummary {
-            display_label: display_label(c, &inv.text[i]),
+            display_label: display_label_for(c, &inv.text[i]),
             label: c.label.clone(),
             kind: c.source_kind.label(),
             logical_files: col_files[i],
@@ -569,7 +574,7 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
 }
 
 /// A readable name for a collection when its content says what it is.
-fn display_label(c: &crate::model::Collection, t: &crate::scan::TextTotals) -> String {
+pub fn display_label_for(c: &crate::model::Collection, t: &crate::scan::TextTotals) -> String {
     if !t.takeout_products.is_empty() {
         let products: Vec<&str> = t
             .takeout_products
@@ -772,6 +777,7 @@ fn language_summary(inv: &Inventory) -> LanguageSummary {
                 basis,
                 words_examined: examined,
                 undetermined_words: tally.undetermined_words,
+                code_or_data_words: tally.non_prose_words,
                 rows: tally.rows(),
             });
         }
@@ -803,6 +809,8 @@ fn language_summary(inv: &Inventory) -> LanguageSummary {
         sampled_documents: all.sampled_documents,
         unreadable_documents: unreadable,
         non_text_files: non_text,
+        code_or_data_words: all.non_prose_words,
+        code_or_data_files: all.non_prose_files,
     }
 }
 
@@ -970,6 +978,14 @@ pub fn render_text(m: &DataMap) -> String {
                 "Too short to tell",
                 group(l.undetermined_words),
                 l.undetermined_percent
+            );
+        }
+        if l.code_or_data_words > 0 || l.code_or_data_files > 0 {
+            let _ = writeln!(
+                s,
+                "  Set aside: {} words of code, data or placeholder text; {} code and data files skipped",
+                group(l.code_or_data_words),
+                group(l.code_or_data_files)
             );
         }
         if l.unreadable_documents > 0 {

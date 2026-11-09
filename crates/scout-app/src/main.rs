@@ -266,6 +266,70 @@ fn last_session(app: AppHandle) -> Option<LastSession> {
     })
 }
 
+// ------------------------------------------------------------ data pack
+// Copies the selections into one folder with standard names. Local only.
+
+#[tauri::command]
+fn package_plan(state: State<'_, AppState>) -> Result<scout_core::package::Plan, String> {
+    let guard = state.inventory.lock().unwrap();
+    let inv = guard.as_ref().ok_or("Assess some data first.")?;
+    Ok(scout_core::package::plan(inv))
+}
+
+#[tauri::command]
+async fn pick_package_dest(app: AppHandle) -> Option<String> {
+    app.dialog()
+        .file()
+        .set_title("Choose where to create the data pack")
+        .blocking_pick_folder()
+        .and_then(|f| f.into_path().ok())
+        .map(|p| p.display().to_string())
+}
+
+#[tauri::command]
+async fn build_package(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    dest: String,
+) -> Result<scout_core::package::Summary, String> {
+    let inv = state
+        .inventory
+        .lock()
+        .unwrap()
+        .take()
+        .ok_or("Assess some data first.")?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    *state.cancel.lock().unwrap() = Some(cancel.clone());
+    let handle = app.clone();
+    let today = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| ymd(d.as_secs() as i64))
+        .unwrap_or_default();
+    let (inv, summary) = tauri::async_runtime::spawn_blocking(move || {
+        let plan = scout_core::package::plan(&inv);
+        let mut last = Instant::now() - Duration::from_secs(1);
+        let summary = scout_core::package::build(
+            &inv,
+            &plan,
+            Path::new(&dest),
+            &format!("Working Minds data pack {today}"),
+            Some(&cancel),
+            &mut |p| {
+                if last.elapsed() >= Duration::from_millis(100) {
+                    let _ = handle.emit("scout://package", p);
+                    last = Instant::now();
+                }
+            },
+        );
+        (inv, summary)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    *state.inventory.lock().unwrap() = Some(inv);
+    *state.cancel.lock().unwrap() = None;
+    Ok(summary)
+}
+
 // ------------------------------------------------------------ source list
 // The owner's edits to the data-source list (sources added or removed).
 // Stored next to the session file; service names and labels only.
@@ -410,6 +474,9 @@ fn main() {
             forget_session,
             get_source_plan,
             set_source_plan,
+            package_plan,
+            pick_package_dest,
+            build_package,
             stop,
             save_map,
             reveal,
