@@ -52,6 +52,8 @@
   function kindInfo(c) {
     if ((c.slack || []).length) return { badge: "#", color: "#6D5BD0", kind: "Slack workspace export" };
     if (attachTargets.has(c.label)) return { badge: "↓", color: "#22A094", kind: "Slack attachments", matched: attachTargets.get(c.label) };
+    if ((c.display_label || "").startsWith("Google Takeout")) return { badge: "G", color: "#2F6FB0", kind: "Google Takeout" };
+    if ((c.display_label || "").endsWith("(Git repository)")) return { badge: "‹›", color: "#5E6E84", kind: "Git repository" };
     const cat = dominantCategory(c);
     if (cat === "Email") return { badge: "@", color: CAT.Email, kind: "Email archive" };
     if ((c.formats || []).length === 1 && c.logical_files === 1) {
@@ -273,7 +275,7 @@
         }
         s += `</g>`;
       });
-      s += `<text class="halo-text" y="${(n.r + 22).toFixed(1)}" text-anchor="middle" font-size="14.5" font-weight="650" fill="#14283F">${esc(trunc(c.label, 30))}</text>
+      s += `<text class="halo-text" y="${(n.r + 22).toFixed(1)}" text-anchor="middle" font-size="14.5" font-weight="650" fill="#14283F">${esc(trunc(c.display_label || c.label, 34))}</text>
         <text class="halo-text" y="${(n.r + 40).toFixed(1)}" text-anchor="middle" font-size="12" fill="#6B7C93">${esc(n.info.kind)} · ${num(c.logical_files)} ${c.logical_files === 1 ? "file" : "files"} · ${n.info.matched != null ? `${num(n.info.matched)} matched to conversations` : `${pct}% examined`}</text>
       </g></g>`;
     });
@@ -476,7 +478,7 @@
         const records = (c.slack || []).length ? s.message_records : c.structured_records;
         const p = examinedOf(c);
         return `<tr>
-          <td><span class="tbl-badge" style="background:${info.color}">${esc(info.badge)}</span><b title="${esc(c.label)}">${esc(trunc(c.label, 40))}</b></td>
+          <td><span class="tbl-badge" style="background:${info.color}">${esc(info.badge)}</span><b title="${esc(c.label)}">${esc(trunc(c.display_label || c.label, 44))}</b></td>
           <td>${esc(info.kind)}</td>
           <td class="num">${num(c.logical_files)}</td>
           <td class="num">${records ? num(records) : "—"}</td>
@@ -607,15 +609,24 @@
   // ------------------------------------------------------------ next steps
   function normalisePlan(p) {
     p = p && typeof p === "object" ? p : {};
-    return { added: Array.isArray(p.added) ? p.added : [], removed: Array.isArray(p.removed) ? p.removed : [] };
+    return {
+      added: Array.isArray(p.added) ? p.added : [],
+      removed: Array.isArray(p.removed) ? p.removed : [],
+      done: Array.isArray(p.done) ? p.done : [],
+    };
   }
   const catalogName = (map, id) => ((map.source_catalog || []).find((s) => s.id === id) || {}).name || id;
+  const displayOf = (map, label) => ((map.collections || []).find((c) => c.label === label) || {}).display_label || label;
 
   function renderNextSteps(host, map, plan, handlers, redraw) {
     const removed = new Set(plan.removed);
+    const doneByHand = new Set(plan.done);
     const sources = map.sources || [];
-    const inMap = sources.filter((s) => s.in_selection);
     const items = [];
+    const save = () => { handlers.onPlan(plan); redraw(); };
+    const markDone = (key) => () => { if (!plan.done.includes(key)) plan.done.push(key); save(); };
+    const undoDone = (key) => () => { plan.done = plan.done.filter((k) => k !== key); save(); };
+    const names = (labels) => labels.map((l) => displayOf(map, l)).join(", ");
 
     // 1. Files the Slack export links to but doesn't contain.
     const rels = map.relationships || [];
@@ -628,81 +639,124 @@
     for (const [from, e] of byFrom) {
       const total = (e.img ? e.img.count : 0) + (e.doc ? e.doc.count : 0);
       const got = (e.img ? e.img.resolved : 0) + (e.doc ? e.doc.resolved : 0);
+      const key = "slack-files:" + from;
       const part = (r, noun) => (r ? (r.resolved ? `${num(r.resolved)} of ${num(r.count)} ${noun}` : `${num(r.count)} ${noun}`) : null);
       const what = [part(e.img, "images"), part(e.doc, "documents")].filter(Boolean).join(" and ");
+      const complete = got >= total;
+      const manual = !complete && doneByHand.has(key);
       items.push({
-        key: "slack-files:" + from, done: got >= total,
-        title: got >= total ? "Files shared in Slack are all in your map" : "Get the files shared in Slack",
+        key, done: complete || manual, manual,
+        title: complete ? "Files shared in Slack: all in your map" : manual ? "Files shared in Slack: marked as done" : "Get the files shared in Slack",
         tag: "Slack",
-        evidence: got ? `${what} added; ${num(total - got)} still missing` : `${what} are linked from messages but not in the export`,
-        from: [from], stat: total - got, statNoun: "files missing", progress: total ? Math.round((got * 100) / total) : 0,
-        actions: got >= total ? [] : [["How to get these", () => handlers.onGuide("slack_images")]],
+        evidence: got ? `${what} matched to messages` + (complete ? "" : `; ${num(total - got)} still missing`) : `${what} are linked from messages but not in the export`,
+        note: manual ? "You marked this as done. Files that could not be downloaded stay listed as missing on the map." : null,
+        from: [from], stat: complete ? total : total - got, statNoun: complete ? "files matched" : "files missing",
+        progress: total ? Math.round((got * 100) / total) : 0,
+        actions: complete ? [] : manual ? [["Undo", undoDone(key), "ghost"]] : [["How to get these", () => handlers.onGuide("slack_images")], ["Mark as done", markDone(key), "ghost"]],
       });
     }
 
-    // 2. Sources the data refers to, plus 3. sources the owner added.
-    const shown = new Set(inMap.map((s) => s.id));
-    sources.filter((s) => !s.in_selection && !removed.has(s.id)).forEach((s) => {
+    // 2. Sources the data refers to: open until their data is in the map.
+    const shown = new Set();
+    const addedIds = new Set(plan.added.map((a) => a.id).filter(Boolean));
+    sources.forEach((s) => {
+      const evidenced = s.links || s.app_installed || s.bot_messages;
+      if (removed.has(s.id) && !s.in_selection) return;
+      if (s.in_selection && !evidenced && !addedIds.has(s.id)) return; // a base source like Slack itself
       shown.add(s.id);
+      const linkLine = s.links ? `${num(s.links)} ${s.links === 1 ? "link" : "links"} to ${num(s.distinct_targets)} distinct ${s.target_noun} in your data` : s.evidence;
+      if (s.in_selection) {
+        // Display names already say what each collection is (e.g. "Google Takeout · Drive").
+        const found = `Found in ${names(s.collections)}`;
+        let note = null;
+        if (s.resolved_targets != null && s.distinct_targets) {
+          note = s.resolved_targets >= s.distinct_targets
+            ? `All ${num(s.distinct_targets)} linked ${s.target_noun} are in the repositories you added.`
+            : `${num(s.resolved_targets)} of ${num(s.distinct_targets)} linked ${s.target_noun} are in the repositories you added; the rest point to repositories that aren't in your map yet.`;
+        } else if (s.id === "google_drive" && s.links) {
+          note = "Takeout names files by title rather than by the IDs in links, so we can't check which linked documents it includes.";
+        }
+        items.push({ key: s.id, done: true, title: `${s.name}: in your map`, tag: s.category, evidence: found, sub: s.links ? linkLine : null, note,
+          stat: s.links || null, statNoun: s.links === 1 ? "link" : "links", from: [], actions: [] });
+        return;
+      }
+      const manual = doneByHand.has(s.id);
       items.push({
-        key: s.id, title: `Add your ${s.name} data`, tag: s.category, evidence: s.evidence, from: s.referenced_from,
+        key: s.id, done: manual, manual,
+        title: manual ? `${s.name}: marked as done` : `Add your ${s.name} data`, tag: s.category,
+        evidence: s.evidence, from: s.referenced_from,
+        note: manual ? "You marked this as done. Add the export to your map to see what it contains." : null,
         stat: s.links || s.bot_messages, statNoun: s.links ? (s.links === 1 ? "link" : "links") : "bot messages",
-        actions: [["How to export", () => handlers.onGuide("export:" + s.id)], ["Remove", () => { plan.removed.push(s.id); handlers.onPlan(plan); redraw(); }, "ghost"]],
+        actions: manual ? [["Undo", undoDone(s.id), "ghost"]]
+          : [["How to export", () => handlers.onGuide("export:" + s.id)], ["Mark as done", markDone(s.id), "ghost"], ["Remove", () => { plan.removed.push(s.id); save(); }, "ghost"]],
       });
     });
+
+    // 3. Sources the owner added.
     plan.added.forEach((a, idx) => {
       const id = a.id || null;
       if (id && shown.has(id)) return;
+      const key = id || "custom:" + a.custom;
       const name = id ? catalogName(map, id) : a.custom;
+      const manual = doneByHand.has(key);
       items.push({
-        key: "added:" + (id || a.custom), title: `Add your ${name} data`, tag: "Added by you",
-        evidence: id ? "No links to it found in your data yet" : "A source you added",
-        from: [], stat: null,
-        actions: [["How to export", () => handlers.onGuide("export:" + (id || "custom"))], ["Remove", () => { plan.added.splice(idx, 1); handlers.onPlan(plan); redraw(); }, "ghost"]],
+        key, done: manual, manual, title: manual ? `${name}: marked as done` : `Add your ${name} data`, tag: "Added by you",
+        evidence: id ? "No links to it found in your data yet" : "A source you added", from: [], stat: null,
+        actions: manual ? [["Undo", undoDone(key), "ghost"]]
+          : [["How to export", () => handlers.onGuide("export:" + (id || "custom"))], ["Mark as done", markDone(key), "ghost"], ["Remove", () => { plan.added.splice(idx, 1); save(); }, "ghost"]],
       });
     });
 
-    // Code behind pull requests, unless a code host is already suggested.
+    // Code behind pull requests, unless a code host already has a step.
     const codeShown = items.some((i) => ["github", "gitlab", "bitbucket"].includes(i.key));
-    rels.filter((r) => r.kind === "code_reviews" && !codeShown).forEach((r) => items.push({
-      key: "code:" + r.from, title: "Add the code behind linked pull requests", tag: "Code", evidence: r.explanation, from: [r.from],
-      stat: r.count, statNoun: "pull requests", actions: [["How to get these", () => handlers.onGuide("code_reviews")]],
-    }));
+    rels.filter((r) => r.kind === "code_reviews" && !codeShown).forEach((r) => {
+      const key = "code:" + r.from, manual = doneByHand.has(key);
+      items.push({ key, done: manual, manual, title: manual ? "Code behind pull requests: marked as done" : "Add the code behind linked pull requests", tag: "Code",
+        evidence: r.explanation, from: [r.from], stat: r.count, statNoun: "pull requests",
+        actions: manual ? [["Undo", undoDone(key), "ghost"]] : [["How to get these", () => handlers.onGuide("code_reviews")], ["Mark as done", markDone(key), "ghost"]] });
+    });
 
-    // Other preparation steps not already covered above.
     const covered = /^(Add the original attachments|If you hold the repositories)/;
     const other = (map.preparation_priorities || []).filter((p) => !covered.test(p));
-
     const open = items.filter((i) => !i.done);
     const done = items.filter((i) => i.done);
+    const total = items.length;
+    const pctDone = total ? Math.round((done.length * 100) / total) : 100;
+
     const row = (it, n) => `<div class="step ${it.done ? "done" : ""}" data-key="${esc(it.key)}">
         <div class="step-num">${it.done ? "✓" : n}</div>
         <div class="step-main">
-          <div class="step-title">${esc(it.title)} <span class="step-tag">${esc(it.tag)}</span></div>
+          <div class="step-title">${esc(it.title)} <span class="step-tag">${esc(it.tag)}</span>${it.manual ? ` <span class="step-tag by-you">by you</span>` : ""}</div>
           <div class="step-evidence">${esc(it.evidence)}</div>
-          ${it.from && it.from.length ? `<div class="step-from">Referenced in ${esc(it.from.join(", "))}</div>` : ""}
-          ${it.progress != null && !it.done ? `<div class="step-progress"><span style="width:${it.progress}%"></span></div>` : ""}
+          ${it.sub ? `<div class="step-from">${esc(it.sub)}</div>` : ""}
+          ${it.from && it.from.length ? `<div class="step-from">Referenced in ${esc(names(it.from))}</div>` : ""}
+          ${it.note ? `<div class="step-note">${esc(it.note)}</div>` : ""}
+          ${it.progress != null && !it.done && it.progress > 0 ? `<div class="step-progress"><span style="width:${it.progress}%"></span></div>` : ""}
         </div>
-        ${it.stat != null ? `<div class="step-stat"><strong>${num(it.stat)}</strong><span>${esc(it.statNoun)}</span></div>` : `<div></div>`}
+        ${it.stat ? `<div class="step-stat"><strong>${num(it.stat)}</strong><span>${esc(it.statNoun)}</span></div>` : `<div></div>`}
         <div class="step-actions">${it.actions.map((a, k) => `<button class="btn ${a[2] || "secondary"} small" data-step="${esc(it.key)}" data-k="${k}">${esc(a[0])}</button>`).join("")}</div>
       </div>`;
-    const removedItems = plan.removed.map((id) => sources.find((s) => s.id === id)).filter(Boolean);
+    const removedItems = plan.removed.map((id) => sources.find((s) => s.id === id)).filter((s) => s && !s.in_selection);
     host.innerHTML = `
-      <div class="in-map"><span class="muted">Already in your map</span>${map.collections.map((c) => `<span class="chip"><i style="background:${kindInfo(c).color}"></i>${esc(trunc(c.label, 34))}</span>`).join("")}</div>
+      <div class="in-map"><span class="muted">Already in your map</span>${map.collections.map((c) => `<span class="chip" title="${esc(c.label)}"><i style="background:${kindInfo(c).color}"></i>${esc(trunc(c.display_label || c.label, 40))}</span>`).join("")}</div>
       <div class="card steps-card">
-        ${open.length ? open.map((it, i) => row(it, i + 1)).join("") : `<div class="step empty"><div class="step-main"><div class="step-title">Nothing obvious to add</div><div class="step-evidence">Your data doesn't link to other systems we recognise. Use “Add a source” for anything we missed.</div></div></div>`}
-        ${done.map((it) => row(it)).join("")}
+        ${total ? `<div class="steps-progress ${open.length ? "" : "all"}">
+          <div class="sp-text"><strong>${num(done.length)} of ${num(total)} done</strong><span>${open.length ? `${num(open.length)} still to add` : "Everything your data points to is accounted for"}</span></div>
+          <div class="sp-bar"><span style="width:${pctDone}%"></span></div>
+        </div>` : ""}
+        ${open.length ? open.map((it, i) => row(it, i + 1)).join("") : ""}
+        ${done.length ? `<div class="steps-divider">Done</div>${done.map((it) => row(it)).join("")}` : ""}
+        ${!total ? `<div class="step empty"><div class="step-main"><div class="step-title">Nothing obvious to add</div><div class="step-evidence">Your data doesn't link to other systems we recognise. Use “Add a source” for anything we missed.</div></div></div>` : ""}
         ${other.length ? `<div class="step-other"><b>Also worth doing</b><ul>${other.map((o) => `<li>${esc(o)}</li>`).join("")}</ul></div>` : ""}
       </div>
       ${removedItems.length ? `<div class="removed-line">${num(removedItems.length)} removed: ${removedItems.map((s) => `<button class="link-btn" data-restore="${esc(s.id)}">${esc(s.name)} ↺</button>`).join(" ")}</div>` : ""}`;
-    const all = [...open, ...done];
     host.querySelectorAll("[data-step]").forEach((b) => {
-      const it = all.find((x) => x.key === b.dataset.step);
+      const it = items.find((x) => x.key === b.dataset.step);
       b.onclick = () => it.actions[+b.dataset.k][1]();
     });
     host.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = () => {
       plan.removed = plan.removed.filter((id) => id !== b.dataset.restore);
-      handlers.onPlan(plan); redraw();
+      save();
     }));
   }
 

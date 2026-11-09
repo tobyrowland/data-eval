@@ -69,6 +69,20 @@ not code-signed yet, so Windows and macOS show a first-run warning.
    their own. Their edits are kept on this computer and included in the saved
    map. Links themselves never leave the private inventory; the map carries
    only service names and counts.
+
+   **Steps tick themselves off** when the source's data arrives. Working
+   Minds recognises:
+   - Google Takeout archives, by product: Drive and Mail
+   - mailboxes
+   - Git repositories, from the remote in `.git/config`, which says whether
+     a repository lives on GitHub, GitLab or Bitbucket
+
+   A done step turns green and says where the data was found. For code it
+   also says how many linked pages fall inside the repositories you added.
+   Anything Working Minds can't detect can be ticked off with *Mark as done*,
+   which can be undone. A progress bar shows how many steps are done.
+   Takeout archives and repositories get readable names, such as "Google
+   Takeout · Drive, Mail · part 3-001" and "acme/core (Git repository)".
 3. **Analysis:** collections, coverage, file formats and languages tables,
    plus activity over time.
 

@@ -363,6 +363,17 @@ code.k { background: var(--surface-2); padding: 1px 6px; border-radius: 6px; fon
 .step-stat span { font-size: 12px; color: var(--muted); }
 .step-actions { display: flex; gap: 6px; justify-content: flex-end; }
 .step.empty { grid-template-columns: 1fr; }
+.step.done { background: linear-gradient(90deg, rgba(227,243,241,.55), transparent 60%); }
+.step.done .step-num { background: var(--teal); color: #fff; box-shadow: 0 4px 12px rgba(24,124,117,.25); }
+.step-tag.by-you { background: var(--teal-soft); color: var(--teal); }
+.step-note { font-size: 12.5px; color: var(--muted); margin-top: 4px; font-style: italic; }
+.steps-progress { display: flex; align-items: center; gap: 18px; padding: 16px 0 14px; border-bottom: 1px solid var(--line); }
+.sp-text strong { display: block; font-size: 16px; }
+.sp-text span { font-size: 13px; color: var(--muted); }
+.sp-bar { flex: 1; height: 10px; border-radius: 5px; background: #F3E2C2; overflow: hidden; }
+.sp-bar span { display: block; height: 100%; border-radius: 5px; background: linear-gradient(90deg, #22A094, #187C75); transition: width .6s cubic-bezier(.2,.7,.2,1); }
+.steps-progress.all .sp-bar { background: var(--teal-soft); }
+.steps-divider { font-size: 11.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--teal); padding: 14px 0 2px; border-top: 1px solid var(--line); margin-top: 2px; }
 .step-other { border-top: 1px solid #EEF2F7; padding: 14px 0 16px 50px; font-size: 13.5px; color: var(--ink-2); }
 .step-other ul { margin: 6px 0 0; padding-left: 18px; }
 .removed-line { font-size: 13px; color: var(--muted); margin: -4px 4px 0; }

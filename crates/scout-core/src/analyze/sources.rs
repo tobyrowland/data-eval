@@ -291,6 +291,66 @@ impl SourceTally {
     }
 }
 
+/// The Google Takeout product a path belongs to, e.g. "Drive" for
+/// `…/Takeout/Drive/Plans.docx`.
+pub fn takeout_product(path: &str) -> Option<&str> {
+    let mut segs = path.split('/');
+    while let Some(s) = segs.next() {
+        if s == "Takeout" {
+            let product = segs.next()?;
+            // A file directly under Takeout/ (e.g. archive_browser.html) is not a product.
+            return segs.next().map(|_| product);
+        }
+    }
+    None
+}
+
+/// Whether a path is a Git repository's config file (`…/.git/config`).
+pub fn is_git_config(path: &str) -> bool {
+    path.ends_with("/.git/config") || path == ".git/config"
+}
+
+/// Remote repositories named in a `.git/config`, as `host/owner/repo`.
+pub fn git_remotes(config: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in config.lines() {
+        let line = line.trim();
+        let Some(url) = line
+            .strip_prefix("url")
+            .map(str::trim_start)
+            .and_then(|l| l.strip_prefix('='))
+        else {
+            continue;
+        };
+        let url = url.trim();
+        // https://host/owner/repo(.git), ssh://git@host/owner/repo, git@host:owner/repo
+        let rest = if let Some((_, r)) = url.split_once("://") {
+            r.split_once('@')
+                .map_or(r, |(_, h)| h)
+                .replacen(':', "/", 0)
+        } else if let Some((_, r)) = url.split_once('@') {
+            r.replacen(':', "/", 1)
+        } else {
+            continue;
+        };
+        let mut parts = rest.split('/').filter(|p| !p.is_empty());
+        let (Some(host), Some(owner), Some(repo)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let host = host.split(':').next().unwrap_or(host).to_ascii_lowercase();
+        let repo = repo.trim_end_matches(".git");
+        out.push(format!(
+            "{host}/{}/{}",
+            owner.to_ascii_lowercase(),
+            repo.to_ascii_lowercase()
+        ));
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 fn match_app(name: &str) -> Option<&'static str> {
     let n = name.to_ascii_lowercase();
     // Longer names first so "google drive" wins over a shorter overlap.
@@ -332,6 +392,33 @@ mod tests {
         assert_eq!(classify("www.notion.so", "/acme/Plan"), Some("notion"));
         assert_eq!(classify("evilgithub.com", "/x"), None);
         assert_eq!(classify("files.slack.com", "/x"), None);
+    }
+
+    #[test]
+    fn recognises_takeout_and_git_remotes() {
+        assert_eq!(
+            takeout_product("t-1.zip/Takeout/Drive/Plans/a.docx"),
+            Some("Drive")
+        );
+        assert_eq!(
+            takeout_product("t-1.zip/Takeout/Mail/All mail.mbox"),
+            Some("Mail")
+        );
+        assert_eq!(
+            takeout_product("t-1.zip/Takeout/archive_browser.html"),
+            None
+        );
+        assert_eq!(takeout_product("docs/notes.md"), None);
+        assert!(is_git_config("app/.git/config"));
+        let cfg = "[remote \"origin\"]\n\turl = git@github.com:Acme/App.git\n[remote \"bb\"]\n\turl = https://user@bitbucket.org/acme/core.git\n\turl = ssh://git@gitlab.com:2222/team/tool\n";
+        assert_eq!(
+            git_remotes(cfg),
+            vec![
+                "bitbucket.org/acme/core",
+                "github.com/acme/app",
+                "gitlab.com/team/tool"
+            ]
+        );
     }
 
     #[test]
