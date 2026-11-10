@@ -24,12 +24,14 @@ PDF and the encrypted private dossier come in later milestones (see below).
 Preview installers are on the
 [Releases page](https://github.com/tobyrowland/data-eval/releases):
 
-- Windows 10/11 (64-bit): `Working-Minds-Setup-windows-x64.exe` or `.msi`
+- Windows 10/11 (64-bit): `Working-Minds-Setup-windows-x64.exe`
+- Optional: `Working-Minds-Attachment-Downloader-Setup-windows-x64.exe`
 
-The preview is built for Windows x64 only for now; macOS and Linux builds are
-paused (see the matrix in `.github/workflows/release.yml`) and will return.
-The command-line tool is in `Working-Minds-CLI-windows-x64.zip`. The preview is
-not code-signed yet, so Windows shows a first-run warning.
+Only Windows x64 is built for now, and CI tests on Windows only. The macOS
+and Linux builds, the `.msi` and the command-line tool download are paused
+and will return once Windows is done (see `.github/workflows/`). The command-line
+tool still builds from source with `cargo build --release --bin working-minds`.
+The preview is not code-signed yet, so Windows shows a first-run warning.
 
 ## The desktop app
 
