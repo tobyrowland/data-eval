@@ -18,7 +18,7 @@ Working Minds — understand your company data, privately.
 Usage:
   working-minds scan <file-or-folder>... [--exclude <path>]... [--json <out.json>]
   working-minds pack <file-or-folder>... --out <folder> [--exclude <path>]...
-  working-minds evaluate <file-or-folder>... [--exclude <path>]... [--json <out.json>]
+  working-minds evaluate <file-or-folder>... [--exclude <path>]... [--json <out.json>] [--report <out.md>]
 
   pack copies everything into one new folder with standard names (Slack/,
   Google Drive/, Google Mail/, Email/, Code/<repo>/, Documents/, Other/),
@@ -31,6 +31,7 @@ Options:
   --exclude <path>   Leave out a path, relative to a selection (e.g. export.zip/random)
   --json <file>      Also save the data map as JSON
   --out <folder>     Where pack creates the data pack folder
+  --report <file>    With evaluate: also write the detailed Working Minds report (Markdown)
   -h, --help         Show this help
 
 Assessment happens on this computer. No data is sent to us or to an AI service.";
@@ -55,6 +56,7 @@ fn main() -> ExitCode {
     let mut opts = ScanOptions::default();
     let mut json_out: Option<PathBuf> = None;
     let mut pack_out: Option<PathBuf> = None;
+    let mut report_out: Option<PathBuf> = None;
     let mut it = args[1..].iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -65,6 +67,10 @@ fn main() -> ExitCode {
             "--out" => match it.next() {
                 Some(v) => pack_out = Some(PathBuf::from(v)),
                 None => return usage_error("--out needs a folder"),
+            },
+            "--report" => match it.next() {
+                Some(v) => report_out = Some(PathBuf::from(v)),
+                None => return usage_error("--report needs a file name"),
             },
             "--json" => match it.next() {
                 Some(v) => json_out = Some(PathBuf::from(v)),
@@ -125,6 +131,16 @@ fn main() -> ExitCode {
             );
         }
         eprintln!("Evaluated in {:.1}s.", started.elapsed().as_secs_f64());
+        if let Some(out) = report_out {
+            let map = build_data_map(&inventory);
+            let md =
+                scout_core::evaluate::wm_report::wm_report(&map, &ev, None, &serde_json::json!({}));
+            if let Err(e) = std::fs::write(&out, md) {
+                eprintln!("Could not save {}: {e}", out.display());
+                return ExitCode::FAILURE;
+            }
+            eprintln!("Saved the Working Minds report to {}", out.display());
+        }
         if let Some(out) = json_out {
             let json = serde_json::to_string_pretty(&ev).expect("evaluation serialises");
             if let Err(e) = std::fs::write(&out, json) {

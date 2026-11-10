@@ -29,9 +29,8 @@ fn day(msgs: &[(&str, &str, Option<&str>)], base: i64) -> String {
     .to_string()
 }
 
-#[test]
-fn evaluation_separates_usable_text_from_bots_duplicates_and_noise() {
-    let d = tempdir("evaluate");
+fn fixture(name: &str) -> scout_core::Inventory {
+    let d = tempdir(name);
     // 2021 conversation by people, plus a bot; a 2024 conversation.
     let old = day(
         &PROSE
@@ -68,7 +67,7 @@ fn evaluation_separates_usable_text_from_bots_duplicates_and_noise() {
     );
     write(&d, "data/sales.csv", b"region,amount\nnorth,10\nsouth,20\n");
 
-    let inv = scan(
+    scan(
         &[
             d.join("export.zip"),
             d.join("copy/export.zip"),
@@ -78,7 +77,12 @@ fn evaluation_separates_usable_text_from_bots_duplicates_and_noise() {
             d.join("data"),
         ],
         ScanOptions::default(),
-    );
+    )
+}
+
+#[test]
+fn evaluation_separates_usable_text_from_bots_duplicates_and_noise() {
+    let inv = fixture("evaluate");
     let ev = evaluate(&inv, None, &mut |_| {});
     let row = |label: &str, kind: Kind| {
         ev.rows
@@ -133,5 +137,66 @@ fn evaluation_separates_usable_text_from_bots_duplicates_and_noise() {
         "ann@acme.com",
     ] {
         assert!(!out.contains(leak), "leaked {leak}");
+    }
+}
+
+#[test]
+fn working_minds_report_is_complete_parseable_and_content_free() {
+    let inv = fixture("wm-report");
+    let map = scout_core::build_data_map(&inv);
+    let ev = evaluate(&inv, None, &mut |_| {});
+    let plan = json!({"removed": ["jira"], "kept": []});
+    let md = scout_core::evaluate::wm_report::wm_report(&map, &ev, Some("Acme Ltd"), &plan);
+    for h in [
+        "# Working Minds data assessment: Acme Ltd",
+        "## How to read this report",
+        "## Summary",
+        "## Dimension scores",
+        "## Breakdown by platform and kind",
+        "## Distributions",
+        "## Items in the assessment",
+        "## Gaps and owner decisions",
+        "## Machine-readable data",
+    ] {
+        assert!(md.contains(h), "missing {h}");
+    }
+    // The JSON appendix parses and agrees with the evaluation.
+    let start = md.find("```json\n").unwrap() + 8;
+    let end = md[start..].find("\n```").unwrap() + start;
+    let v: serde_json::Value = serde_json::from_str(&md[start..end]).unwrap();
+    assert_eq!(v["totals"]["usable_tokens"], json!(ev.totals.usable_tokens));
+    assert_eq!(v["company"]["name"], json!("Acme Ltd"));
+    for s in v["scores"].as_array().unwrap() {
+        let n = s["score"].as_u64().unwrap();
+        assert!(n <= 100, "{s}");
+    }
+    let uniq = v["scores"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "uniqueness")
+        .unwrap();
+    assert!(
+        uniq["score"].as_u64().unwrap() < 100,
+        "duplicates lower uniqueness"
+    );
+    // Distributions add up.
+    let d = &ev.distributions;
+    assert_eq!(
+        d.documents_by_length.iter().sum::<u64>(),
+        ev.totals.documents
+    );
+    assert!(d.usable_tokens_by_year.values().sum::<u64>() <= ev.totals.usable_tokens);
+    assert!(md.contains("Platforms the owner marked as not theirs: jira"));
+    // Measurements only.
+    for leak in [
+        "migration",
+        "vendor contract",
+        "ann@acme.com",
+        "Ann <",
+        "dps-test-",
+        "pricing page",
+    ] {
+        assert!(!md.contains(leak), "leaked {leak}");
     }
 }
