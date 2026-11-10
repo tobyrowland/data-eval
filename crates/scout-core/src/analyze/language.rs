@@ -36,19 +36,37 @@ pub struct LanguageTally {
     pub non_prose_files: u64,
     /// Documents whose text was sampled rather than read in full.
     pub sampled_documents: u64,
+    /// Chat messages offered, for sampling large exports.
+    pub chat_messages: u64,
 }
 
 impl LanguageTally {
     /// Classifies one short unit of text, such as a chat message.
     pub fn add_segment(&mut self, text: &str) {
-        let words = word_count(text);
+        self.add_segment_weighted(text, 1);
+    }
+
+    /// A chat message. Every message is classified until 5,000 have been
+    /// seen; after that one in ten, counted ten times. Language detection is
+    /// the slowest step, and the shares stay accurate on large exports.
+    pub fn add_chat_message(&mut self, text: &str) {
+        self.chat_messages += 1;
+        if self.chat_messages <= 5_000 {
+            self.add_segment_weighted(text, 1);
+        } else if self.chat_messages.is_multiple_of(10) {
+            self.add_segment_weighted(text, 10);
+        }
+    }
+
+    fn add_segment_weighted(&mut self, text: &str, weight: u64) {
+        let words = word_count(text) * weight;
         if words == 0 {
             return;
         }
         let letters = text.chars().filter(|c| c.is_alphabetic()).count();
         if letters >= MIN_LETTERS && (!looks_like_prose(text) || is_placeholder(text)) {
             self.non_prose_words += words;
-            self.non_prose_segments += 1;
+            self.non_prose_segments += weight;
             return;
         }
         let detected = if letters >= SENTENCE_LETTERS {
@@ -62,11 +80,11 @@ impl LanguageTally {
             Some(info) => {
                 let e = self.by_code.entry(group_code(&info, text)).or_default();
                 e.0 += words;
-                e.1 += 1;
+                e.1 += weight;
             }
             None => {
                 self.undetermined_words += words;
-                self.undetermined_segments += 1;
+                self.undetermined_segments += weight;
             }
         }
     }

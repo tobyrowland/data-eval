@@ -25,6 +25,9 @@ pub struct ScanOptions {
     /// Set to true from another thread to stop the scan promptly. Work done
     /// so far is kept and reported as incomplete.
     pub cancel: Option<Arc<AtomicBool>>,
+    /// Set for the training-value evaluation pass: readable documents are
+    /// handed to it in full.
+    pub evaluator: Option<Arc<std::sync::Mutex<crate::evaluate::Evaluator>>>,
 }
 
 /// Live counters for the progress screen.
@@ -953,28 +956,45 @@ impl Scanner<'_> {
             format,
             Format::Json | Format::Jsonl | Format::Csv | Format::Tsv | Format::Mbox
         );
+        // During an evaluation pass, readable text is also collected.
+        let mut sink = self
+            .opts
+            .evaluator
+            .as_ref()
+            .and_then(|ev| crate::evaluate::Sink::new(ev, format, ctx.collection, &ctx.path));
+        let mut tee;
+        let m_reader: &mut dyn Read = match sink.as_mut() {
+            Some(s) => {
+                tee = crate::evaluate::Tee {
+                    inner: &mut m,
+                    sink: s,
+                };
+                &mut tee
+            }
+            None => &mut m,
+        };
         let res: io::Result<Outcome> =
             if structured && self.records_total >= lim.max_structured_records {
                 self.limits_reached.insert(Reason::RecordLimit);
                 Ok(Outcome::with(Status::PartlyAssessed, Reason::RecordLimit))
             } else {
                 match format {
-                    Format::Json => tabular::json(&mut m, lim.max_json_document_bytes as usize),
-                    Format::Jsonl => tabular::jsonl(&mut m),
+                    Format::Json => tabular::json(m_reader, lim.max_json_document_bytes as usize),
+                    Format::Jsonl => tabular::jsonl(m_reader),
                     // A Discord package's messages are read row by row.
                     Format::Csv
                         if ctx.path.to_ascii_lowercase().ends_with("/messages.csv")
                             && ctx.path.to_ascii_lowercase().contains("messages/c") =>
                     {
-                        tabular::csv_rows(&mut m, lim.max_json_document_bytes as usize)
+                        tabular::csv_rows(m_reader, lim.max_json_document_bytes as usize)
                     }
-                    Format::Csv => tabular::delimited(&mut m, b','),
-                    Format::Tsv => tabular::delimited(&mut m, b'\t'),
+                    Format::Csv => tabular::delimited(m_reader, b','),
+                    Format::Tsv => tabular::delimited(m_reader, b'\t'),
                     Format::PlainText | Format::Markdown | Format::Html | Format::Xml => {
-                        text::analyze(&mut m, false, false)
+                        text::analyze(m_reader, false, false)
                     }
-                    Format::Mbox => text::analyze(&mut m, true, false),
-                    Format::Eml => text::analyze(&mut m, false, true),
+                    Format::Mbox => text::analyze(m_reader, true, false),
+                    Format::Eml => text::analyze(m_reader, false, true),
                     _ => Ok(Outcome::inventoried()),
                 }
             };
@@ -1007,7 +1027,23 @@ impl Scanner<'_> {
             self.note_limit(&r.clone());
         }
         let bytes = m.bytes_read();
+        if let Some(sk) = sink {
+            sk.finish(bytes);
+        }
+        if let Some(ev) = &self.opts.evaluator {
+            if matches!(format, Format::Csv | Format::Tsv | Format::Jsonl) {
+                if let Ok(mut e) = ev.lock() {
+                    e.add_structured(ctx.collection, bytes);
+                }
+            }
+        }
         let sha = complete.then(|| m.finish_hash());
+        // The evaluation pass needs only its own measurements.
+        if self.opts.evaluator.is_some() {
+            outcome.sample = None;
+            outcome.message_ids.clear();
+            outcome.addresses.clear();
+        }
         if let Some((sample, truncated)) = outcome.sample.take() {
             use crate::analyze::language::{strip_mail_headers, strip_markup};
             if crate::analyze::sources::is_git_config(&ctx.path) {
@@ -1061,7 +1097,17 @@ impl Scanner<'_> {
                     .add_document(&text, truncated);
             }
         }
-        if let Some(doc) = outcome.json.take() {
+        let mut json = outcome.json.take();
+        // The evaluation pass takes the document; the normal analysis is
+        // skipped because only the evaluation's measurements are needed.
+        if let Some(ev) = &self.opts.evaluator {
+            if let Some(doc) = json.take() {
+                if let Ok(mut e) = ev.lock() {
+                    e.add_json(ctx.collection, &ctx.path, &doc);
+                }
+            }
+        }
+        if let Some(doc) = json {
             if let std::collections::hash_map::Entry::Vacant(e) = self.links_by_item.entry(id) {
                 let links = crate::analyze::sources::count_links(&doc.to_string());
                 if !links.is_empty() {

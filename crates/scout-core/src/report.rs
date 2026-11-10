@@ -33,6 +33,11 @@ pub struct DataMap {
     pub relationships: Vec<Relationship>,
     /// Files linked from all Slack exports together, each counted once.
     pub slack_files: Option<SlackFiles>,
+    /// Files linked from Teams messages (SharePoint, OneDrive), each counted
+    /// once, and how many were found in the selection.
+    pub teams_files: Option<TeamsFiles>,
+    /// The organisation the data belongs to, as far as it can be told.
+    pub company: Option<Company>,
     /// Content-derived activity per calendar month (YYYY-MM), all collections.
     pub activity: BTreeMap<String, u64>,
     pub stopped_by_user: bool,
@@ -257,6 +262,317 @@ pub struct Relationship {
     pub explanation: String,
 }
 
+/// Files linked from Microsoft Teams messages and how many are present.
+#[derive(Debug, Serialize)]
+pub struct TeamsFiles {
+    pub referenced: u64,
+    pub found: u64,
+    /// The Teams exports these come from.
+    pub exports: Vec<String>,
+    /// Items where linked files were found.
+    pub found_in: Vec<String>,
+}
+
+/// The company name detected from the data, with what it rests on.
+#[derive(Debug, Serialize, Clone)]
+pub struct Company {
+    pub name: String,
+    /// "high", "medium" or "low".
+    pub confidence: &'static str,
+    pub evidence: Vec<String>,
+}
+
+/// Files linked from Teams messages, and which items hold files with those
+/// names: (referenced names, matched names per collection).
+pub fn teams_file_matches(inv: &Inventory) -> (BTreeSet<String>, HashMap<u32, BTreeSet<String>>) {
+    let mut referenced = BTreeSet::new();
+    for t in &inv.teams {
+        referenced.extend(t.referenced_files.iter().cloned());
+    }
+    let mut matched: HashMap<u32, BTreeSet<String>> = HashMap::new();
+    if referenced.is_empty() {
+        return (referenced, matched);
+    }
+    for it in &inv.items {
+        if it.status == Status::Excluded || !is_logical_file(it.status, it.format) {
+            continue;
+        }
+        let name = crate::analyze::teams::normalise_file_name(
+            it.local_path.rsplit('/').next().unwrap_or(""),
+        );
+        if referenced.contains(&name) {
+            matched.entry(it.collection).or_default().insert(name);
+        }
+    }
+    (referenced, matched)
+}
+
+/// Collections that hold Teams linked files: enough of their files match.
+pub fn teams_file_collections(
+    inv: &Inventory,
+    matched: &HashMap<u32, BTreeSet<String>>,
+) -> BTreeSet<u32> {
+    matched
+        .iter()
+        .filter(|(&c, names)| {
+            let files = inv
+                .items
+                .iter()
+                .filter(|it| it.collection == c && is_logical_file(it.status, it.format))
+                .count();
+            !inv.teams[c as usize].is_teams() && (names.len() * 2 >= files || names.len() >= 20)
+        })
+        .map(|(&c, _)| c)
+        .collect()
+}
+
+fn teams_files(inv: &Inventory) -> Option<TeamsFiles> {
+    let (referenced, matched) = teams_file_matches(inv);
+    if referenced.is_empty() {
+        return None;
+    }
+    let found: BTreeSet<&String> = matched.values().flatten().collect();
+    Some(TeamsFiles {
+        referenced: referenced.len() as u64,
+        found: found.len() as u64,
+        exports: inv
+            .collections
+            .iter()
+            .filter(|c| !inv.teams[c.id as usize].referenced_files.is_empty())
+            .map(|c| c.label.clone())
+            .collect(),
+        found_in: {
+            let mut v: Vec<u32> = matched.keys().copied().collect();
+            v.sort_unstable();
+            v.into_iter()
+                .map(|c| inv.collections[c as usize].label.clone())
+                .collect()
+        },
+    })
+}
+
+/// Lower-case alphanumeric stem of a company name or domain label, without
+/// legal and product suffixes, for comparing candidates.
+fn company_stem(s: &str) -> String {
+    let mut words: Vec<String> = s
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_lowercase())
+        .collect();
+    const SUFFIXES: &[&str] = &[
+        "ltd",
+        "limited",
+        "inc",
+        "llc",
+        "gmbh",
+        "kft",
+        "zrt",
+        "bv",
+        "sa",
+        "sas",
+        "ag",
+        "plc",
+        "co",
+        "corp",
+        "io",
+        "hq",
+        "app",
+        "team",
+        "teams",
+        "group",
+        "labs",
+        "studio",
+        "engineering",
+        "product",
+        "design",
+        "workspace",
+        "slack",
+        "export",
+    ];
+    while words.len() > 1 && SUFFIXES.contains(&words.last().unwrap().as_str()) {
+        words.pop();
+    }
+    words.concat()
+}
+
+/// The organisation the data belongs to, from items in the main body of
+/// data (not ones flagged as unrelated).
+fn detect_company(inv: &Inventory, linkages: &[Linkage]) -> Option<Company> {
+    // stem -> (score, kinds of evidence, display candidates with weight)
+    struct Cand {
+        score: u32,
+        kinds: BTreeSet<&'static str>,
+        evidence: Vec<String>,
+        display: Vec<(u32, String)>,
+    }
+    let mut cands: BTreeMap<String, Cand> = BTreeMap::new();
+    let mut add = |name: &str,
+                   weight: u32,
+                   kind: &'static str,
+                   evidence: String,
+                   display: Option<(u32, String)>| {
+        let stem = company_stem(name);
+        if stem.len() < 2 {
+            return;
+        }
+        let c = cands.entry(stem).or_insert(Cand {
+            score: 0,
+            kinds: BTreeSet::new(),
+            evidence: Vec::new(),
+            display: Vec::new(),
+        });
+        c.score += weight;
+        if c.kinds.insert(kind) {
+            c.evidence.push(evidence);
+        }
+        if let Some(d) = display {
+            c.display.push(d);
+        }
+    };
+    let in_main = |i: usize| linkages.get(i).is_none_or(|l| l.status != "unlinked");
+    let mut domains: HashMap<String, u32> = HashMap::new();
+    let mut owners: BTreeSet<(String, &'static str)> = BTreeSet::new();
+    for c in &inv.collections {
+        let i = c.id as usize;
+        if !in_main(i) {
+            continue;
+        }
+        if c.source_kind == SourceKind::SlackExport {
+            if let Some(pos) = c.label.find(" Slack export") {
+                let name = c.label[..pos].trim();
+                if !name.is_empty() {
+                    add(
+                        name,
+                        3,
+                        "slack",
+                        "the Slack export name".to_string(),
+                        Some((3, name.to_string())),
+                    );
+                }
+            }
+        }
+        let f = &inv.text[i].fingerprint;
+        for (d, n) in &f.domain_counts {
+            *domains.entry(d.clone()).or_default() += n;
+        }
+        for o in &f.orgs {
+            for (host, kind) in [
+                ("bitbucket.org/", "Bitbucket workspace"),
+                ("github.com/", "GitHub organisation"),
+                ("gitlab.com/", "GitLab group"),
+            ] {
+                if let Some(owner) = o.strip_prefix(host) {
+                    owners.insert((owner.to_string(), kind));
+                }
+            }
+        }
+        for r in &inv.text[i].git_remotes {
+            let mut p = r.split('/');
+            if let (Some(host), Some(owner)) = (p.next(), p.next()) {
+                let kind = if host.contains("bitbucket") {
+                    "Bitbucket workspace"
+                } else if host.contains("gitlab") {
+                    "GitLab group"
+                } else {
+                    "GitHub organisation"
+                };
+                owners.insert((owner.to_ascii_lowercase(), kind));
+            }
+        }
+        let common_word = |names: &BTreeSet<String>| -> Option<String> {
+            let firsts: Vec<&str> = names
+                .iter()
+                .filter_map(|n| n.split_whitespace().next())
+                .collect();
+            let first = *firsts.first()?;
+            (firsts.iter().filter(|f| **f == first).count() * 2 > firsts.len())
+                .then(|| first.to_string())
+        };
+        if let Some(w) = common_word(&inv.teams[i].team_names) {
+            add(
+                &w,
+                2,
+                "teams",
+                "Microsoft Teams team names".to_string(),
+                Some((2, w.clone())),
+            );
+        }
+        if let Some(w) = common_word(&inv.discord[i].server_names) {
+            add(
+                &w,
+                2,
+                "discord",
+                "Discord server names".to_string(),
+                Some((2, w.clone())),
+            );
+        }
+    }
+    // The most used email domain (and any others nearly as used).
+    let mut doms: Vec<(String, u32)> = domains.into_iter().collect();
+    doms.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    if let Some(top) = doms.first().map(|d| d.1) {
+        for (d, n) in doms.iter().filter(|d| d.1 * 2 >= top).take(3) {
+            let label = d.split('.').next().unwrap_or(d);
+            add(
+                label,
+                2,
+                "email",
+                format!(
+                    "email domain {d} ({})",
+                    plural(*n as u64, "address", "addresses")
+                ),
+                None,
+            );
+        }
+    }
+    for (owner, kind) in &owners {
+        add(owner, 1, "code", format!("{kind} {owner}"), None);
+    }
+    let (stem, best) = cands
+        .into_iter()
+        .max_by(|a, b| a.1.score.cmp(&b.1.score).then(b.0.cmp(&a.0)))?;
+    // How it is written: a name from Slack, Teams or Discord; else the most
+    // common capitalised form in the text; else title case.
+    let mut display = best.display.iter().max_by_key(|d| d.0).map(|d| d.1.clone());
+    if display.is_none() {
+        let mut forms: HashMap<&str, u32> = HashMap::new();
+        for t in &inv.text {
+            for (k, sf) in &t.fingerprint.surface {
+                if company_stem(sf) == stem {
+                    *forms.entry(sf.as_str()).or_default() +=
+                        t.fingerprint.terms.get(k).copied().unwrap_or(1);
+                }
+            }
+        }
+        display = forms
+            .into_iter()
+            .max_by_key(|f| f.1)
+            .map(|f| f.0.to_string());
+    }
+    let name = display.unwrap_or_else(|| {
+        let mut c = stem.chars();
+        c.next()
+            .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+            .unwrap_or_default()
+    });
+    let strong = best.kinds.contains("slack")
+        || best.kinds.contains("email")
+        || best.kinds.contains("teams")
+        || best.kinds.contains("discord");
+    let confidence = if best.kinds.len() >= 2 {
+        "high"
+    } else if strong {
+        "medium"
+    } else {
+        "low"
+    };
+    Some(Company {
+        name,
+        confidence,
+        evidence: best.evidence,
+    })
+}
+
 /// Files referred to by every Slack export in the assessment, each counted
 /// once however many exports mention it, and how many are present.
 #[derive(Debug, Serialize)]
@@ -452,6 +768,7 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
     let snapshots = code_snapshots(inv);
     let (overlaps, obsolete) = collection_overlaps(inv, &col_hashes);
     let linkages = linkages(inv, &col_hashes);
+    let teams_cols = teams_file_collections(inv, &teams_file_matches(inv).1);
     let attachment_cols: BTreeSet<u32> = inv
         .attachments
         .values()
@@ -596,7 +913,7 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
                 })
                 .collect(),
             slack,
-            platforms: platforms_of(inv, c, &snapshots, &attachment_cols),
+            platforms: platforms_of(inv, c, &snapshots, &attachment_cols, &teams_cols),
             overlaps: overlaps[i].clone(),
             obsolete_given: obsolete[i].clone(),
         });
@@ -813,6 +1130,8 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         preparation_priorities: prep.into_iter().map(|p| p.1).collect(),
         relationships,
         slack_files: slack_files(inv),
+        teams_files: teams_files(inv),
+        company: detect_company(inv, &linkages),
         activity,
         stopped_by_user: inv.cancelled,
         languages,
@@ -868,6 +1187,7 @@ fn platforms_of(
     c: &crate::model::Collection,
     snapshots: &HashMap<u32, CodeSnapshot>,
     attachment_cols: &BTreeSet<u32>,
+    teams_cols: &BTreeSet<u32>,
 ) -> Vec<&'static str> {
     let has_mail = inv.items.iter().any(|it| {
         it.collection == c.id
@@ -900,7 +1220,7 @@ fn platforms_of(
     if let Some(snap) = snapshots.get(&c.id) {
         add(snap.service);
     }
-    if inv.teams[c.id as usize].is_teams() {
+    if inv.teams[c.id as usize].is_teams() || teams_cols.contains(&c.id) {
         add("teams");
     }
     if inv.discord[c.id as usize].is_discord() {
@@ -1057,6 +1377,16 @@ fn linkages(inv: &Inventory, col_hashes: &[Vec<&str>]) -> Vec<Linkage> {
                     .any(|r| ts.iter().any(|t| t == r || t.starts_with(&format!("{r}/"))))
             {
                 tie(c.id, o as u32);
+            }
+        }
+    }
+    // Files that Teams messages link to, found in another item.
+    let (_, teams_matched) = teams_file_matches(inv);
+    for (&c, names) in &teams_matched {
+        for t in &inv.collections {
+            let tr = &inv.teams[t.id as usize].referenced_files;
+            if t.id != c && names.iter().any(|n| tr.contains(n)) {
+                tie(c, t.id);
             }
         }
     }

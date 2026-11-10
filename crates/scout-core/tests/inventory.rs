@@ -136,6 +136,7 @@ fn expansion_budget_still_inventories_the_rest() {
         },
         exclude: vec![],
         cancel: None,
+        evaluator: None,
     };
     let inv = scan(&[d.join("in")], opts);
     assert_eq!(inv.items.len(), 5, "every file stays in the inventory");
@@ -161,6 +162,7 @@ fn logical_file_limit_stops_enumeration_and_says_so() {
         },
         exclude: vec![],
         cancel: None,
+        evaluator: None,
     };
     let inv = scan(&[d.join("in")], opts);
     assert_eq!(inv.items.len(), 4);

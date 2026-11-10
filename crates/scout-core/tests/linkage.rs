@@ -127,15 +127,13 @@ fn unrelated_teams_export_is_flagged_and_related_data_is_linked() {
 
     // Names, addresses and terms never reach the map.
     let json = serde_json::to_string(&map).unwrap();
-    for leak in [
-        "Dev Shah",
-        "pixpaint.example",
-        "acme.com",
-        "Hydra",
-        "Contoso",
-    ] {
+    for leak in ["Dev Shah", "pixpaint.example", "Hydra", "Contoso"] {
         assert!(!json.contains(leak), "leaked {leak}");
     }
+    // The company's own domain appears only as evidence for its name.
+    let company = map.company.as_ref().unwrap();
+    assert_eq!(json.matches("acme.com").count(), 1, "{:?}", company);
+    assert!(company.evidence.iter().any(|e| e.contains("acme.com")));
 
     // With the other items removed there is nothing to compare against.
     let keep = inv

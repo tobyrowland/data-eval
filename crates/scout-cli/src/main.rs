@@ -18,10 +18,14 @@ Working Minds — understand your company data, privately.
 Usage:
   working-minds scan <file-or-folder>... [--exclude <path>]... [--json <out.json>]
   working-minds pack <file-or-folder>... --out <folder> [--exclude <path>]...
+  working-minds evaluate <file-or-folder>... [--exclude <path>]... [--json <out.json>]
 
   pack copies everything into one new folder with standard names (Slack/,
   Google Drive/, Google Mail/, Email/, Code/<repo>/, Documents/, Other/),
   unpacking and merging Google Takeout parts. Originals are not changed.
+
+  evaluate reads every readable document in full and estimates its value as
+  training data for AI models: tokens, usable tokens, quality and duplicates.
 
 Options:
   --exclude <path>   Leave out a path, relative to a selection (e.g. export.zip/random)
@@ -42,7 +46,8 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let packing = args[0] == "pack";
-    if args[0] != "scan" && !packing {
+    let evaluating = args[0] == "evaluate";
+    if args[0] != "scan" && !packing && !evaluating {
         eprintln!("Unknown command '{}'.\n\n{USAGE}", args[0]);
         return ExitCode::from(2);
     }
@@ -82,6 +87,53 @@ fn main() -> ExitCode {
 
     eprintln!("Working on your computer. Nothing is being uploaded.");
     let inventory = scan(&inputs, opts);
+    if evaluating {
+        let started = std::time::Instant::now();
+        let mut last = std::time::Instant::now();
+        let ev = scout_core::evaluate::evaluate(&inventory, None, &mut |p| {
+            if last.elapsed().as_secs() >= 2 {
+                eprintln!(
+                    "  … {} documents, {} MB read",
+                    p.documents,
+                    p.bytes_read / 1_000_000
+                );
+                last = std::time::Instant::now();
+            }
+        });
+        println!("Training value: {} ({})", ev.rating, ev.rating_reason);
+        println!(
+            "{} documents · {} tokens · {} usable · {} conversation · {} written before 2023 · {} duplicated · {} low quality · {} automated",
+            ev.totals.documents,
+            ev.totals.tokens,
+            ev.totals.usable_tokens,
+            ev.totals.conversation_tokens,
+            ev.totals.pre_llm_tokens,
+            ev.totals.duplicate_tokens,
+            ev.totals.low_quality_tokens,
+            ev.totals.machine_tokens
+        );
+        for r in &ev.rows {
+            println!(
+                "  {:<40} {:<26} {:>7} docs {:>10} tokens {:>10} usable  {}  {}",
+                r.collection.chars().take(40).collect::<String>(),
+                r.kind_label,
+                r.documents,
+                r.tokens,
+                r.usable_tokens,
+                "●".repeat(r.value_band as usize),
+                r.reason
+            );
+        }
+        eprintln!("Evaluated in {:.1}s.", started.elapsed().as_secs_f64());
+        if let Some(out) = json_out {
+            let json = serde_json::to_string_pretty(&ev).expect("evaluation serialises");
+            if let Err(e) = std::fs::write(&out, json) {
+                eprintln!("Could not save {}: {e}", out.display());
+                return ExitCode::FAILURE;
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
     if packing {
         let Some(out) = pack_out else {
             return usage_error("pack needs --out <folder>");

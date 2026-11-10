@@ -29,6 +29,10 @@ pub struct Fingerprint {
     /// How often words appear in lower case. A capitalised word that is
     /// also used as an ordinary word ("Canvas", "release") is not a name.
     pub lower: HashMap<u64, u32>,
+    /// Distinct addresses per email domain (non-public domains only).
+    pub domain_counts: HashMap<String, u32>,
+    /// How each distinctive term is written ("CRANQ"), by term hash.
+    pub surface: HashMap<u64, String>,
 }
 
 /// Common first names, which coincide between unrelated companies. People
@@ -265,6 +269,12 @@ fn host_re() -> &'static Regex {
         Regex::new(r"[Hh][Tt][Tt][Pp][Ss]?://([A-Za-z0-9.\-]+)(?::[0-9]+)?(/[^\s<>|\x22'`)\]\\]*)?")
             .unwrap()
     })
+}
+
+/// Microsoft Teams and Skype conversation IDs look like addresses
+/// ("19:abc@thread.tacv2", "…@unq.gbl.spaces") but aren't people.
+fn is_chat_id_domain(domain: &str) -> bool {
+    domain.starts_with("thread.") || domain.ends_with("gbl.spaces") || domain.ends_with(".spaces")
 }
 
 /// Domains of public services, which say nothing about whose data it is.
@@ -558,11 +568,14 @@ impl Fingerprint {
         let Some((local, domain)) = a.rsplit_once('@') else {
             return;
         };
-        if local.is_empty() || !domain.contains('.') {
+        if local.is_empty() || !domain.contains('.') || is_chat_id_domain(domain) {
             return;
         }
-        if self.addresses.len() < MAX_IDS {
-            self.addresses.insert(hash(&a));
+        if self.addresses.len() < MAX_IDS
+            && self.addresses.insert(hash(&a))
+            && !is_public_domain(domain)
+        {
+            *self.domain_counts.entry(domain.to_string()).or_default() += 1;
         }
         self.add_domain(domain);
     }
@@ -666,8 +679,10 @@ impl Fingerprint {
             if is_common_term(&lower) || is_common_first_name(&lower) {
                 continue;
             }
-            if self.terms.len() < MAX_TERMS || self.terms.contains_key(&hash(&lower)) {
-                *self.terms.entry(hash(&lower)).or_default() += 1;
+            let h = hash(&lower);
+            if self.terms.len() < MAX_TERMS || self.terms.contains_key(&h) {
+                *self.terms.entry(h).or_default() += 1;
+                self.surface.entry(h).or_insert_with(|| w.to_string());
             }
         }
     }
@@ -741,6 +756,12 @@ impl Fingerprint {
         }
         for (k, v) in &o.lower {
             *self.lower.entry(*k).or_default() += v;
+        }
+        for (k, v) in &o.domain_counts {
+            *self.domain_counts.entry(k.clone()).or_default() += v;
+        }
+        for (k, v) in &o.surface {
+            self.surface.entry(*k).or_insert_with(|| v.clone());
         }
     }
 

@@ -55,8 +55,22 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
 
 ### Page layout
 
-1. **The data map** comes first: a one-line summary and four key figures
-   above it.
+1. **The company and the data map** come first.
+   - **Company name:** detected from the data and shown as the page title,
+     with what it rests on ("Detected from the Slack export name, email
+     domain cranq.com and Bitbucket workspace cranq") and an *Edit* link.
+     Signals are the Slack export's name, the most used company email
+     domain, code-host workspaces, and Teams team and Discord server names.
+     Only items in the main body of data count, so an unrelated export
+     can't win. The owner's own name, if they set one, is kept with their
+     choices.
+   - **The map:** one bubble per platform around the company, sized by its
+     unique content (messages and emails counted once, otherwise files).
+     It shows at most one badge per bubble, "6,123 files missing" or
+     "Check this data" (dashed amber outline), and the platforms the data
+     points to but that aren't collected yet sit along the bottom. Hovering
+     a bubble shows its totals; clicking it opens that platform's card.
+   - **Above the map:** a one-line summary and four key figures.
 2. **Your platforms** shows what has been collected and what is still
    missing, one card per platform: Slack, Email, Google Drive, GitHub,
    GitLab, Bitbucket, and a final "Other files" card. Each card has:
@@ -128,6 +142,13 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
    - **PST files** from a Purview eDiscovery export are counted but not read
      yet
 
+   **Teams linked files.** Teams messages point to files kept in SharePoint
+   or OneDrive. When the owner adds those files (a SharePoint or OneDrive
+   folder, or the linked files from an eDiscovery export), they are matched
+   to the messages by file name. The Teams card shows "312 of 540 files
+   shared in Teams are in your map", the folder joins the Teams card, and it
+   goes to `Microsoft Teams/Linked files/` in the data pack.
+
    **Discord** exports get their own card too:
    - Discord's own **"Request your data" package**: `Account/user.json`,
      `Messages/c<id>/channel.json` with `messages.json` (or `messages.csv`
@@ -145,7 +166,35 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
    flagged "Only connected to …". A group is only flagged when it shows
    whose data it is (people, addresses, domains or distinctive names), not
    when it is merely thin.
-3. **Analysis:** collections, coverage, file formats and languages tables,
+3. **Training value** (run on demand: *Evaluate training value*). A second
+   pass reads every readable document in full, on this computer, and
+   measures its value as training data for AI models.
+   - **What counts as a document:** a chat conversation (a Slack
+     channel-day, a Teams chat, a Discord channel; 200 messages at most), an
+     email, a text file or a code file. Emails are split from mailboxes with
+     MIME parsing: attachments are skipped, base64 and quoted-printable are
+     decoded, and quoted replies and signatures are removed.
+   - **Measures:**
+     - tokens (about 1.33 per word, characters for unspaced scripts)
+     - kind: conversation, email, document, code, structured, or automated
+     - written by people, or by bots, notifications and bulk mail
+     - year, with text from before 2023 counted separately
+     - a 0–1 quality score (word shape, symbols, repetition, function words)
+     - exact and near duplicates (MinHash, 70% similarity)
+   - **Usable tokens** are written by people, score at least 0.5 for
+     quality, and aren't duplicated.
+   - **The owner sees:** a headline ("About 48M usable tokens of
+     human-written text"), a High/Medium/Low rating, bars by kind, and a
+     table by platform and kind (documents, tokens, usable tokens, years,
+     value ●●●, why). Below the table is "What would raise the value",
+     drawn from the map: missing Slack files, duplicate items, unconnected
+     items, code without history, PDFs not evaluated yet, and linked
+     platforms not added.
+   - **Speed and output:** it runs with progress and *Stop* (partial results
+     are marked incomplete), at roughly 100 MB/s of mail on a laptop. The
+     result goes into the saved map. `working-minds evaluate <inputs>` does
+     the same from the command line.
+4. **Analysis:** collections, coverage, file formats and languages tables,
    plus activity over time.
 
 ### Create data pack
