@@ -5,6 +5,7 @@
 //! no standard-library socket APIs, which `tests/no_network.rs` enforces.
 
 pub mod analyze;
+pub mod browse;
 pub mod detect;
 pub mod guard;
 pub mod limits;
@@ -16,7 +17,9 @@ pub mod scan;
 
 pub use limits::Limits;
 pub use report::{build_data_map, DataMap};
-pub use scan::{extend_scan, scan, scan_with_progress, Inventory, Progress, ScanOptions};
+pub use scan::{
+    extend_scan, scan, scan_with_progress, update_scan, Inventory, Progress, ScanOptions,
+};
 
 pub const APP_NAME: &str = "Working Minds";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");

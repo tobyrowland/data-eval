@@ -237,7 +237,34 @@ pub struct SourceTally {
     pub by_service: BTreeMap<&'static str, ServiceStats>,
 }
 
+/// Links to known services in a piece of text, by service. Used for
+/// per-file counts that stay local (which files tie an item to a source).
+pub fn count_links(text: &str) -> BTreeMap<&'static str, u32> {
+    let mut out = BTreeMap::new();
+    if !text.contains("http") {
+        return out;
+    }
+    for c in url_re().captures_iter(text) {
+        let path = c.get(2).map_or("", |m| m.as_str());
+        if let Some(id) = classify(&c[1], path) {
+            *out.entry(id).or_default() += 1;
+        }
+    }
+    out
+}
+
 impl SourceTally {
+    /// Follows a re-numbering of collections (after some were removed).
+    pub fn renumber_collections(&mut self, map: &std::collections::HashMap<u32, u32>) {
+        for st in self.by_service.values_mut() {
+            st.collections = st
+                .collections
+                .iter()
+                .filter_map(|c| map.get(c).copied())
+                .collect();
+        }
+    }
+
     /// Counts links to known services in a piece of text.
     pub fn scan_text(&mut self, text: &str, collection: u32) {
         if !text.contains("http") {

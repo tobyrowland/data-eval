@@ -89,6 +89,8 @@
   }
 
   $("start").onclick = () => startAssess();
+  // Exclusions to reopen the last session with; null for a fresh start.
+  let resumeExclude = null;
   async function startAssess() {
     if (!selections.length) return;
     assessing = true;
@@ -104,7 +106,8 @@
       $("c-time").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
     }, 250);
     try {
-      const map = await invoke("assess", { paths: selections.map((s) => s.path) });
+      const map = await invoke("assess", { paths: selections.map((s) => s.path), exclude: resumeExclude });
+      resumeExclude = null;
       setStage(4);
       await new Promise((r) => setTimeout(r, 450));
       setStage(5);
@@ -152,6 +155,46 @@
       assessing = false;
     }
   }
+  // ------------------------------------- remove or restore items and files
+  // Changes only this assessment and the data pack; nothing on disk changes.
+  async function applyChange(title, run, after) {
+    if (assessing) return;
+    assessing = true;
+    const el = $("adding");
+    $("adding-title").textContent = title;
+    $("adding-detail").textContent = "Updating your map on this computer…";
+    $("adding-stop").disabled = false; $("adding-stop").textContent = "Stop";
+    el.hidden = false;
+    requestAnimationFrame(() => el.classList.add("on"));
+    try {
+      const map = await run();
+      if (after) await after();
+      showMap(map, `<div class="update-banner reveal"><div class="update-icon" aria-hidden="true">✓</div><div><b>${esc(title.replace(/…$/, ""))}</b><span>Your map, checklist and data pack are up to date. Nothing on disk was changed.</span></div></div>`);
+    } catch (err) {
+      toast("Could not change that: " + err);
+    } finally {
+      el.classList.remove("on");
+      setTimeout(() => (el.hidden = true), 250);
+      assessing = false;
+    }
+  }
+  const fileHandlers = {
+    list: (label, prefix, service) => invoke("list_files", { label, prefix: prefix || null, service: service || null }),
+    linking: (label, service) => invoke("linking_files", { label, service }),
+    removeItem: (label, display) => applyChange(`Removing ${display}…`, () => invoke("remove_items", { labels: [label] }), async () => {
+      const removed = await invoke("removed_items").catch(() => []);
+      const gone = new Set(removed.map((r) => r.path));
+      selections = selections.filter((s) => !gone.has(s.path));
+      renderSelection();
+    }),
+    restoreItem: (path, name) => applyChange(`Putting back ${name}…`, () => invoke("restore_item", { path }), async () => {
+      if (!selections.some((s) => s.path === path)) selections.push(...(await invoke("describe_paths", { paths: [path] })));
+      renderSelection();
+    }),
+    exclude: (path, name) => applyChange(`Leaving out ${name}…`, () => invoke("exclude_paths", { paths: [path] })),
+    restore: (path, name) => applyChange(`Putting back ${name}…`, () => invoke("restore_paths", { paths: [path] })),
+  };
+
   $("adding-stop").onclick = async () => { $("adding-stop").disabled = true; $("adding-stop").textContent = "Stopping…"; await invoke("stop"); };
 
   /** A short, measured summary of what an addition changed. */
@@ -206,6 +249,7 @@
       selections = await invoke("describe_paths", { paths: last.paths });
       renderSelection();
       $("resume").hidden = true;
+      resumeExclude = last.exclude || [];
       startAssess();
     };
     $("resume-fresh").onclick = async () => { await invoke("forget_session"); $("resume").hidden = true; };
@@ -229,6 +273,10 @@
     currentMap = map;
     let plan = null;
     try { plan = await invoke("get_source_plan"); } catch (_) { /* first run */ }
+    const [linkCounts, removedItems] = await Promise.all([
+      invoke("link_file_counts").catch(() => ({})),
+      invoke("removed_items").catch(() => []),
+    ]);
     show("screen-map");
     window.ScoutMap.render($("map-page"), map, {
       onSave: async () => {
@@ -243,7 +291,8 @@
       onGuide: (kind) => openGuide(kind),
       onPack: () => openPack(),
       onPlan: (p) => invoke("set_source_plan", { plan: p }).catch((e) => toast("Could not save your list: " + e)),
-    }, { banner, plan });
+      files: fileHandlers,
+    }, { banner, plan, linkCounts, removedItems });
   }
 
   // ---------------------------------------------------------------- guides

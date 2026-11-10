@@ -9,7 +9,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use scout_core::report::render_text;
-use scout_core::{build_data_map, extend_scan, ScanOptions};
+use scout_core::{build_data_map, extend_scan, update_scan, ScanOptions};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,6 +23,9 @@ struct AppState {
     cancel: Mutex<Option<Arc<AtomicBool>>>,
     inventory: Mutex<Option<scout_core::Inventory>>,
     last: Mutex<Option<(serde_json::Value, String)>>,
+    /// Items the owner removed from this assessment (paths), so they can be
+    /// put back. Nothing on disk is touched.
+    removed: Mutex<Vec<String>>,
 }
 
 /// What the Add screen shows for one selection. Only metadata is read here.
@@ -138,6 +141,7 @@ async fn run_scan(
     state: &AppState,
     paths: Vec<String>,
     extend: bool,
+    exclude: Vec<String>,
 ) -> Result<serde_json::Value, String> {
     let cancel = Arc::new(AtomicBool::new(false));
     *state.cancel.lock().unwrap() = Some(cancel.clone());
@@ -151,6 +155,7 @@ async fn run_scan(
     let result = tauri::async_runtime::spawn_blocking(move || {
         let opts = ScanOptions {
             cancel: Some(cancel),
+            exclude,
             ..ScanOptions::default()
         };
         let mut last = Instant::now() - Duration::from_secs(1);
@@ -171,13 +176,267 @@ async fn run_scan(
     })
     .await
     .map_err(|e| e.to_string())?;
+    finish(&app, state, result)
+}
+
+/// Keeps a new assessment and its map, and remembers the session.
+fn finish(
+    app: &AppHandle,
+    state: &AppState,
+    result: (
+        scout_core::Inventory,
+        Result<serde_json::Value, String>,
+        String,
+    ),
+) -> Result<serde_json::Value, String> {
     let (inventory, json, text) = result;
+    *state.cancel.lock().unwrap() = None;
     let json = json?;
-    remember_session(&app, &inventory);
+    // Items added back are no longer "removed".
+    state.removed.lock().unwrap().retain(|r| {
+        !inventory
+            .collections
+            .iter()
+            .any(|c| c.source.display().to_string() == *r)
+    });
+    remember_session(app, &inventory, &state.removed.lock().unwrap());
     *state.inventory.lock().unwrap() = Some(inventory);
     *state.last.lock().unwrap() = Some((json.clone(), text));
-    *state.cancel.lock().unwrap() = None;
     Ok(json)
+}
+
+/// Changes the current assessment on a background thread: drops `remove`,
+/// reads `reread` again, with `exclude` as the new exclusion list.
+async fn run_update(
+    app: AppHandle,
+    state: &AppState,
+    remove: Vec<u32>,
+    reread: Vec<u32>,
+    exclude: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    let prev = state
+        .inventory
+        .lock()
+        .unwrap()
+        .take()
+        .ok_or("There is no assessment to change yet.")?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    *state.cancel.lock().unwrap() = Some(cancel.clone());
+    let handle = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let opts = ScanOptions {
+            cancel: Some(cancel),
+            exclude,
+            ..ScanOptions::default()
+        };
+        let mut last = Instant::now() - Duration::from_secs(1);
+        let inventory = update_scan(prev, &remove, &reread, opts, &mut |p| {
+            if last.elapsed() >= Duration::from_millis(80) {
+                let _ = handle.emit("scout://progress", p);
+                last = Instant::now();
+            }
+        });
+        let map = build_data_map(&inventory);
+        let text = render_text(&map);
+        (
+            inventory,
+            serde_json::to_value(&map).map_err(|e| e.to_string()),
+            text,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    finish(&app, state, result)
+}
+
+fn collection_id(inv: &scout_core::Inventory, label: &str) -> Result<u32, String> {
+    inv.collections
+        .iter()
+        .find(|c| c.label == label)
+        .map(|c| c.id)
+        .ok_or_else(|| format!("{label} is not in this assessment."))
+}
+
+/// Folders and files inside one item, for the owner's own screen only.
+#[tauri::command]
+fn list_files(
+    state: State<'_, AppState>,
+    label: String,
+    prefix: Option<String>,
+    service: Option<String>,
+) -> Result<Vec<scout_core::browse::Entry>, String> {
+    let guard = state.inventory.lock().unwrap();
+    let inv = guard.as_ref().ok_or("There is no assessment yet.")?;
+    let id = collection_id(inv, &label)?;
+    Ok(scout_core::browse::children(
+        inv,
+        id,
+        prefix.as_deref(),
+        service.as_deref(),
+    ))
+}
+
+/// Files in one item that link to a service, most links first.
+#[tauri::command]
+fn linking_files(
+    state: State<'_, AppState>,
+    label: String,
+    service: String,
+) -> Result<Vec<scout_core::browse::Entry>, String> {
+    let guard = state.inventory.lock().unwrap();
+    let inv = guard.as_ref().ok_or("There is no assessment yet.")?;
+    let id = collection_id(inv, &label)?;
+    Ok(scout_core::browse::linking_files(inv, id, &service, 500))
+}
+
+/// For every item: how many of its files link to each service.
+#[tauri::command]
+fn link_file_counts(
+    state: State<'_, AppState>,
+) -> std::collections::BTreeMap<String, std::collections::BTreeMap<&'static str, u64>> {
+    let guard = state.inventory.lock().unwrap();
+    let Some(inv) = guard.as_ref() else {
+        return Default::default();
+    };
+    inv.collections
+        .iter()
+        .map(|c| {
+            (
+                c.label.clone(),
+                scout_core::browse::linking_file_counts(inv, c.id),
+            )
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+struct RemovedItem {
+    path: String,
+    name: String,
+}
+
+/// Items removed from this assessment that can be put back.
+#[tauri::command]
+fn removed_items(state: State<'_, AppState>) -> Vec<RemovedItem> {
+    state
+        .removed
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|p| Path::new(p).exists())
+        .map(|p| RemovedItem {
+            path: p.clone(),
+            name: Path::new(p)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.clone()),
+        })
+        .collect()
+}
+
+/// Takes whole items out of the assessment (and so out of the data pack).
+#[tauri::command]
+async fn remove_items(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    labels: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    let (ids, paths, exclude) = {
+        let guard = state.inventory.lock().unwrap();
+        let inv = guard.as_ref().ok_or("There is no assessment yet.")?;
+        let mut ids = Vec::new();
+        let mut paths = Vec::new();
+        for l in &labels {
+            let id = collection_id(inv, l)?;
+            ids.push(id);
+            paths.push(inv.collections[id as usize].source.display().to_string());
+        }
+        (ids, paths, inv.exclude.clone())
+    };
+    {
+        let mut removed = state.removed.lock().unwrap();
+        for p in paths {
+            if !removed.contains(&p) {
+                removed.push(p);
+            }
+        }
+    }
+    run_update(app, &state, ids, Vec::new(), exclude).await
+}
+
+/// Puts a removed item back. Only that item is read.
+#[tauri::command]
+async fn restore_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    let exclude = state
+        .inventory
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|i| i.exclude.clone())
+        .unwrap_or_default();
+    run_scan(app, &state, vec![path], true, exclude).await
+}
+
+/// Leaves files or folders inside items out. Only the items they are in are
+/// read again.
+#[tauri::command]
+async fn exclude_paths(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    let (reread, exclude) = {
+        let guard = state.inventory.lock().unwrap();
+        let inv = guard.as_ref().ok_or("There is no assessment yet.")?;
+        let mut exclude = inv.exclude.clone();
+        let mut reread = Vec::new();
+        for p in &paths {
+            let p = p.trim_matches('/').to_string();
+            reread.extend(inv.collections_for_path(&p));
+            if !exclude.contains(&p) {
+                exclude.push(p);
+            }
+        }
+        reread.sort_unstable();
+        reread.dedup();
+        (reread, exclude)
+    };
+    run_update(app, &state, Vec::new(), reread, exclude).await
+}
+
+/// Puts excluded files or folders back.
+#[tauri::command]
+async fn restore_paths(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    let (reread, exclude) = {
+        let guard = state.inventory.lock().unwrap();
+        let inv = guard.as_ref().ok_or("There is no assessment yet.")?;
+        let wanted: Vec<String> = paths
+            .iter()
+            .map(|p| p.trim_matches('/').to_string())
+            .collect();
+        let exclude: Vec<String> = inv
+            .exclude
+            .iter()
+            .filter(|e| !wanted.contains(&e.trim_matches('/').to_string()))
+            .cloned()
+            .collect();
+        let mut reread: Vec<u32> = wanted
+            .iter()
+            .flat_map(|p| inv.collections_for_path(p))
+            .collect();
+        reread.sort_unstable();
+        reread.dedup();
+        (reread, exclude)
+    };
+    run_update(app, &state, Vec::new(), reread, exclude).await
 }
 
 #[tauri::command]
@@ -185,8 +444,14 @@ async fn assess(
     app: AppHandle,
     state: State<'_, AppState>,
     paths: Vec<String>,
+    exclude: Option<Vec<String>>,
 ) -> Result<serde_json::Value, String> {
-    run_scan(app, &state, paths, false).await
+    // A fresh assessment starts with nothing removed, unless it reopens the
+    // last session (which passes its exclusions).
+    if exclude.is_none() {
+        state.removed.lock().unwrap().clear();
+    }
+    run_scan(app, &state, paths, false, exclude.unwrap_or_default()).await
 }
 
 /// Adds more files or folders to the current assessment. Only the new
@@ -200,7 +465,14 @@ async fn assess_more(
     if state.inventory.lock().unwrap().is_none() {
         return Err("There is no assessment to add to yet.".into());
     }
-    run_scan(app, &state, paths, true).await
+    let exclude = state
+        .inventory
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|i| i.exclude.clone())
+        .unwrap_or_default();
+    run_scan(app, &state, paths, true, exclude).await
 }
 
 // ------------------------------------------------------------ last session
@@ -215,7 +487,7 @@ fn session_file(app: &AppHandle) -> Option<PathBuf> {
         .map(|d| d.join("last-assessment.json"))
 }
 
-fn remember_session(app: &AppHandle, inv: &scout_core::Inventory) {
+fn remember_session(app: &AppHandle, inv: &scout_core::Inventory, removed: &[String]) {
     let Some(f) = session_file(app) else { return };
     let paths: Vec<String> = inv
         .collections
@@ -231,13 +503,21 @@ fn remember_session(app: &AppHandle, inv: &scout_core::Inventory) {
     }
     let _ = std::fs::write(
         f,
-        serde_json::json!({ "paths": paths, "saved_unix": saved }).to_string(),
+        serde_json::json!({
+            "paths": paths,
+            "exclude": inv.exclude,
+            "removed": removed,
+            "saved_unix": saved,
+        })
+        .to_string(),
     );
 }
 
 #[derive(Serialize)]
 struct LastSession {
     paths: Vec<String>,
+    /// Files and folders the owner left out inside those items.
+    exclude: Vec<String>,
     missing: usize,
     saved_unix: u64,
 }
@@ -259,7 +539,25 @@ fn last_session(app: AppHandle) -> Option<LastSession> {
     if paths.is_empty() {
         return None;
     }
+    let exclude = v["exclude"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| p.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let removed: Vec<String> = v["removed"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| p.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    *app.state::<AppState>().removed.lock().unwrap() = removed;
     Some(LastSession {
+        exclude,
         missing: all.len() - paths.len(),
         paths,
         saved_unix: v["saved_unix"].as_u64().unwrap_or(0),
@@ -379,6 +677,7 @@ fn forget_session(app: AppHandle, state: State<'_, AppState>) {
     }
     *state.inventory.lock().unwrap() = None;
     *state.last.lock().unwrap() = None;
+    state.removed.lock().unwrap().clear();
 }
 
 #[tauri::command]
@@ -478,6 +777,14 @@ fn main() {
             pick_package_dest,
             build_package,
             stop,
+            list_files,
+            linking_files,
+            link_file_counts,
+            removed_items,
+            remove_items,
+            restore_item,
+            exclude_paths,
+            restore_paths,
             save_map,
             reveal,
             open_download_page
