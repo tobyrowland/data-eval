@@ -119,6 +119,24 @@ not code-signed yet, so Windows shows a first-run warning.
      exports, counts once
    - **PST files** from a Purview eDiscovery export are counted but not read
      yet
+
+   **Discord** exports get their own card too:
+   - Discord's own **"Request your data" package**: `Account/user.json`,
+     `Messages/c<id>/channel.json` with `messages.json` (or `messages.csv`
+     in older packages), and `Servers/index.json`
+   - **DiscordChatExporter** channel exports (JSON) for whole servers
+   - counts messages (each once, even if a package is added twice),
+     servers, channels, DMs, group chats and linked attachments
+   - a personal package holds only the messages written by the account that
+     requested it, and the card says so
+
+   **Groups of unrelated items are flagged too.** Items are grouped by what
+   connects them, pair by pair, and the largest group is taken as the main
+   data. Two exports from another company that only connect to each other
+   (for example a Teams and a Discord export from the same team) are both
+   flagged "Only connected to …". A group is only flagged when it shows
+   whose data it is (people, addresses, domains or distinctive names), not
+   when it is merely thin.
 3. **Analysis:** collections, coverage, file formats and languages tables,
    plus activity over time.
 

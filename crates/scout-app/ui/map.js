@@ -52,6 +52,7 @@
   function kindInfo(c) {
     if ((c.slack || []).length) return { badge: "#", color: "#6D5BD0", kind: "Slack workspace export" };
     if (c.teams) return { badge: "T", color: "#5059C9", kind: "Microsoft Teams export" };
+    if (c.discord) return { badge: "D", color: "#5865F2", kind: c.discord.own_messages_only ? "Discord data package" : "Discord channel export" };
     if (attachTargets.has(c.label)) return { badge: "↓", color: "#22A094", kind: "Slack attachments", matched: attachTargets.get(c.label) };
     if ((c.display_label || "").startsWith("Google Takeout")) return { badge: "G", color: "#2F6FB0", kind: "Google Takeout" };
     if ((c.display_label || "").endsWith("(Git repository)")) return { badge: "‹›", color: "#5E6E84", kind: "Git repository" };
@@ -637,8 +638,8 @@
   // One card per platform with the items (files) collected for it, their
   // stats and overlaps, then the platforms the data points to that aren't
   // collected yet.
-  const PLATFORM_NAMES = { slack: "Slack", teams: "Microsoft Teams", email: "Email", google_drive: "Google Drive", google_other: "Google (other products)", github: "GitHub", gitlab: "GitLab", bitbucket: "Bitbucket" };
-  const PLATFORM_ORDER = ["slack", "teams", "email", "google_drive", "google_other", "github", "gitlab", "bitbucket"];
+  const PLATFORM_NAMES = { slack: "Slack", teams: "Microsoft Teams", discord: "Discord", email: "Email", google_drive: "Google Drive", google_other: "Google (other products)", github: "GitHub", gitlab: "GitLab", bitbucket: "Bitbucket" };
+  const PLATFORM_ORDER = ["slack", "teams", "discord", "email", "google_drive", "google_other", "github", "gitlab", "bitbucket"];
   // Item rows whose file tree is open, kept across redraws.
   const openTrees = new Set();
 
@@ -705,6 +706,7 @@
     function recordsOf(c) {
       const s = sumSlack(c);
       if ((c.slack || []).length) return `${num(s.message_records)} messages`;
+      if (c.discord) return `${num(c.discord.messages)} messages`;
       if (c.teams) return `${num(c.teams.messages)} messages${c.teams.meetings ? ` · ${num(c.teams.meetings)} meetings` : ""}`;
       const mail = (c.formats || []).filter((f) => f.category === "Email").length;
       if (!c.structured_records) return "—";
@@ -754,15 +756,28 @@
       const dups = list.filter((c) => c.obsolete_given).length;
       const facts = [`${num(list.length)} ${list.length === 1 ? "item" : "items"}`, `${num(files)} files`, bytes(size)];
       const notes = [];
+      let partial = false;
       if (firsts.length) facts.push(`${firsts[0]} → ${lasts[lasts.length - 1]}`);
       if (p === "slack") { const m = list.reduce((a, c) => a + (c.slack || []).reduce((x, s) => x + s.message_records - (s.records_also_in_other_exports || 0), 0), 0); if (m) facts.push(`${num(m)} messages, each counted once`); }
+      if (p === "discord") {
+        const d = list.filter((c) => c.discord).map((c) => c.discord);
+        const m = d.reduce((a, x) => a + x.messages - x.messages_also_in_other_items, 0);
+        const servers = d.reduce((a, x) => a + x.servers, 0);
+        const chats = d.reduce((a, x) => a + x.channels + x.direct_messages + x.group_messages, 0);
+        const att = d.reduce((a, x) => a + x.attachments_referenced, 0);
+        if (m) facts.push(`${num(m)} messages, each counted once`, `${num(servers)} ${servers === 1 ? "server" : "servers"}`, `${num(chats)} channels and DMs`);
+        if (att) facts.push(`${num(att)} attachments linked, not included`);
+        if (d.some((x) => x.own_messages_only)) {
+          partial = true;
+          notes.push(`<div class="pc-note warn"><span><b>Only one person's messages.</b> A Discord data package holds only the messages written by the account that requested it; other people's replies aren't in it. For whole servers, an admin can export channels with a tool such as DiscordChatExporter.</span><span class="pc-note-act">${act("How to export", () => handlers.onGuide("export:discord"))}</span></div>`);
+        }
+      }
       if (p === "teams") {
         const m = list.reduce((a, c) => a + (c.teams ? c.teams.messages - c.teams.messages_also_in_other_items : 0), 0);
         const ch = list.reduce((a, c) => a + (c.teams ? c.teams.channels + c.teams.chats : 0), 0);
         if (m) facts.push(`${num(m)} messages, each counted once`, `${num(ch)} channels and chats`);
         if (list.some((c) => c.teams && !c.teams.messages)) notes.push(`<div class="pc-note warn"><span>An eDiscovery export in Outlook PST files is counted but can't be read yet. Ask your admin for the HTML or JSON export instead.</span><span class="pc-note-act">${act("How to export", () => handlers.onGuide("export:teams"))}</span></div>`);
       }
-      let partial = false;
       if (p === "slack" && map.slack_files) {
         const sf = map.slack_files, totalF = sf.images + sf.documents, got = sf.images_found + sf.documents_found;
         if (totalF && got < totalF) {

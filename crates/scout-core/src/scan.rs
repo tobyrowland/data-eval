@@ -66,6 +66,7 @@ pub struct Inventory {
     pub collections: Vec<Collection>,
     pub slack: Vec<SlackRecogniser>,
     pub teams: Vec<crate::analyze::teams::TeamsRecogniser>,
+    pub discord: Vec<crate::analyze::discord::DiscordRecogniser>,
     pub text: Vec<TextTotals>,
     pub limits_reached: BTreeSet<Reason>,
     pub expanded_bytes_read: u64,
@@ -77,7 +78,8 @@ pub struct Inventory {
     pub attachments: std::collections::BTreeMap<String, Vec<u64>>,
     /// Slack messages seen so far, so overlapping exports count once.
     pub slack_seen: crate::analyze::slack::SeenMessages,
-    /// Teams messages seen so far, so a chat in two files counts once.
+    /// Teams and Discord messages seen so far (keyed by conversation and
+    /// message ID), so a message in two files or exports counts once.
     pub teams_seen: crate::analyze::teams::SeenTeamsMessages,
     /// Links to known services per item, by service. Local only: shows
     /// which files tie an item to a source.
@@ -104,6 +106,7 @@ struct Scanner<'p> {
     collections: Vec<Collection>,
     slack: Vec<SlackRecogniser>,
     teams: Vec<crate::analyze::teams::TeamsRecogniser>,
+    discord: Vec<crate::analyze::discord::DiscordRecogniser>,
     text: Vec<TextTotals>,
     budget: Budget,
     records_total: u64,
@@ -162,6 +165,7 @@ pub fn extend_scan(
         collections: Vec::new(),
         slack: Vec::new(),
         teams: Vec::new(),
+        discord: Vec::new(),
         text: Vec::new(),
         records_total: 0,
         limits_reached: BTreeSet::new(),
@@ -181,6 +185,7 @@ pub fn extend_scan(
         s.attachments = p.attachments;
         s.slack_seen = p.slack_seen;
         s.teams = p.teams;
+        s.discord = p.discord;
         s.teams_seen = p.teams_seen;
         s.links_by_item = p.links_by_item;
         s.mail_seen = p.mail_seen;
@@ -210,6 +215,7 @@ pub fn extend_scan(
         });
         s.slack.push(SlackRecogniser::default());
         s.teams.push(Default::default());
+        s.discord.push(Default::default());
         s.text.push(TextTotals::default());
         // Logical paths start with the selection's own name, as before.
         s.visit_path(input, base, collection);
@@ -232,6 +238,7 @@ pub fn extend_scan(
         collections: s.collections,
         slack: s.slack,
         teams: s.teams,
+        discord: s.discord,
         text: s.text,
         limits_reached: s.limits_reached,
         limits: s.opts.limits,
@@ -278,6 +285,7 @@ pub fn update_scan(
                     .iter()
                     .chain(prev.text[id as usize].email_overlap.keys())
                     .chain(prev.teams[id as usize].overlaps_with().iter())
+                    .chain(prev.discord[id as usize].overlaps_with().iter())
                     .any(|o| *o != id && dropped.contains(o))
             })
             .collect();
@@ -325,12 +333,14 @@ impl Inventory {
         let mut slack = Vec::new();
         let mut text = Vec::new();
         let mut teams = Vec::new();
-        for (((mut c, mut s), mut t), mut tm) in self
+        let mut discord = Vec::new();
+        for ((((mut c, mut s), mut t), mut tm), mut dc) in self
             .collections
             .into_iter()
             .zip(self.slack)
             .zip(self.text)
             .zip(self.teams)
+            .zip(self.discord)
         {
             let Some(&n) = cmap.get(&c.id) else {
                 continue;
@@ -343,6 +353,8 @@ impl Inventory {
                 .filter_map(|(k, v)| cmap.get(&k).map(|&n| (n, v)))
                 .collect();
             tm.renumber_collections(&cmap);
+            dc.renumber_collections(&cmap);
+            discord.push(dc);
             collections.push(c);
             slack.push(s);
             text.push(t);
@@ -396,6 +408,7 @@ impl Inventory {
             mail_seen,
             teams,
             teams_seen,
+            discord,
             ..self
         }
     }
@@ -948,6 +961,13 @@ impl Scanner<'_> {
                 match format {
                     Format::Json => tabular::json(&mut m, lim.max_json_document_bytes as usize),
                     Format::Jsonl => tabular::jsonl(&mut m),
+                    // A Discord package's messages are read row by row.
+                    Format::Csv
+                        if ctx.path.to_ascii_lowercase().ends_with("/messages.csv")
+                            && ctx.path.to_ascii_lowercase().contains("messages/c") =>
+                    {
+                        tabular::csv_rows(&mut m, lim.max_json_document_bytes as usize)
+                    }
                     Format::Csv => tabular::delimited(&mut m, b','),
                     Format::Tsv => tabular::delimited(&mut m, b'\t'),
                     Format::PlainText | Format::Markdown | Format::Html | Format::Xml => {
@@ -1052,6 +1072,12 @@ impl Scanner<'_> {
                 .fingerprint
                 .add_json(&doc);
             self.teams[ctx.collection as usize].offer(
+                &ctx.path,
+                &doc,
+                ctx.collection,
+                &mut self.teams_seen,
+            );
+            self.discord[ctx.collection as usize].offer(
                 &ctx.path,
                 &doc,
                 ctx.collection,

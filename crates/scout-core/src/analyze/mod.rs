@@ -1,6 +1,7 @@
 //! Content parsers for the first release. Each parser streams from a reader,
 //! never executes content and never follows links.
 
+pub mod discord;
 pub mod fingerprint;
 pub mod language;
 pub mod slack;

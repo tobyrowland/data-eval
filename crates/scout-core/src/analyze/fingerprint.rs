@@ -454,6 +454,7 @@ impl Fingerprint {
             Value::Object(o) => {
                 let personish = [
                     "email",
+                    "username",
                     "userId",
                     "userPrincipalName",
                     "address",
@@ -472,15 +473,16 @@ impl Fingerprint {
                             Value::String(s),
                         ) => self.add_address(s),
                         (
-                            "displayName" | "real_name" | "display_name" | "name" | "fullName",
+                            "displayName" | "real_name" | "display_name" | "global_name"
+                            | "nickname" | "name" | "fullName",
                             Value::String(s),
                         ) if personish && s.contains(' ') => self.add_person(s),
                         ("tenantId" | "team_id" | "enterprise_id", Value::String(s)) => {
                             self.add_org(s)
                         }
                         (
-                            "text" | "content" | "subject" | "description" | "bodyPreview"
-                            | "topic" | "purpose" | "value",
+                            "text" | "content" | "Contents" | "subject" | "description"
+                            | "bodyPreview" | "topic" | "purpose" | "value",
                             Value::String(s),
                         ) => self.add_text(s),
                         (_, Value::String(s)) if s.contains('@') && s.len() < 200 => {

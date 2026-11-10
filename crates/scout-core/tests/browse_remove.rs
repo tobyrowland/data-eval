@@ -210,8 +210,14 @@ fn platforms_and_obsolete_duplicates() {
     // A Takeout part with Drive and Mail, an identical copy of it, a
     // mailbox, and loose notes.
     let takeout = zip_bytes(&[
-        ("Takeout/archive_browser.html", b"<html></html>"),
-        ("Takeout/Drive/Plans/Roadmap.md", b"# Roadmap\nShip it.\n"),
+        (
+            "Takeout/archive_browser.html",
+            b"<html><body>Archive browser for this Google Takeout export.</body></html>",
+        ),
+        (
+            "Takeout/Drive/Plans/Roadmap.md",
+            b"# Roadmap\nShip it. The roadmap covers the next two quarters of work in detail.\n",
+        ),
         (
             "Takeout/Mail/All mail.mbox",
             b"From a@b Mon\nFrom: a\nSubject: x\n\nhello\n",

@@ -330,6 +330,7 @@
   // How to export each kind of source. Kept short; the owner follows the
   // service's own admin screens. Nothing here is fetched from the internet.
   const EXPORT_GUIDES = {
+    discord: ["Each person can request their own data in Discord: User Settings › Data & Privacy › Request your data. The package holds only the messages they wrote.", "For whole servers or channels, a server admin can export channel history with a tool such as DiscordChatExporter (JSON); Working Minds reads those exports too."],
     teams: ["Ask your Microsoft 365 admin for an export of the Teams chats and channels: Microsoft Purview eDiscovery (choose HTML or individual messages rather than PST, which this release can count but not read yet), or a Teams Export API / Graph export, which saves JSON files.", "On free or personal Teams, use Export your data in your Microsoft account; it gives a ZIP with messages.json."],
     github: ["Clone each repository with its full history, using GitHub Desktop or <code class=\"k\">git clone</code>. Avoid “Download ZIP”, which drops the history.", "Pull requests and issues aren't part of a clone. An organisation owner can export them as a migration archive."],
     gitlab: ["Clone each repository with its full history (<code class=\"k\">git clone</code>).", "To include issues and merge requests, export the project from its settings (Export project)."],

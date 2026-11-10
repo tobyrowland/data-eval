@@ -121,6 +121,8 @@ pub struct CollectionSummary {
     pub obsolete_given: Option<String>,
     /// Microsoft Teams messages in this item, when it is a Teams export.
     pub teams: Option<crate::analyze::teams::TeamsInventory>,
+    /// Discord messages in this item, when it is a Discord export.
+    pub discord: Option<crate::analyze::discord::DiscordInventory>,
     /// Whether this item seems connected to the rest of the data.
     pub linkage: Linkage,
 }
@@ -366,9 +368,11 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         if let Some(r) = &it.reason {
             *reasons.entry(r.clone()).or_default() += 1;
         }
-        // Mailboxes are compared by Message-ID instead.
+        // Mailboxes are compared by Message-ID instead. Tiny files ("[]",
+        // an empty settings file) are identical everywhere and say nothing
+        // about overlap or connection.
         if let Some(h) = &it.sha256 {
-            if it.expanded_bytes > 0
+            if it.expanded_bytes >= 64
                 && it.status != Status::Excluded
                 && !matches!(it.format, Format::Mbox | Format::Eml)
             {
@@ -399,7 +403,8 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         if matches!(it.format, Format::Mbox | Format::Eml) {
             mail_records[c] += recs;
         } else if inv.collections[c].source_kind != SourceKind::SlackExport
-            && !(inv.teams[c].is_teams() && it.format == Format::Json)
+            && !((inv.teams[c].is_teams() || inv.discord[c].is_discord())
+                && matches!(it.format, Format::Json | Format::Csv))
         {
             if duplicate {
                 t.duplicate_records += recs;
@@ -420,6 +425,11 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
                 unique += s.message_records - dup;
                 t.duplicate_records += dup;
             }
+        }
+        if let Some(dc) = inv.discord[i].inventory() {
+            let dup = dc.messages_also_in_other_items.min(dc.messages);
+            unique += dc.messages - dup;
+            t.duplicate_records += dup;
         }
         if let Some(tm) = inv.teams[i].inventory() {
             let dup = tm.messages_also_in_other_items.min(tm.messages);
@@ -452,15 +462,18 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         let i = c.id as usize;
         let slack = inv.slack[i].inventories();
         let teams = inv.teams[i].inventory();
+        let discord = inv.discord[i].inventory();
         let first = slack
             .iter()
             .filter_map(|s| s.first_message_unix)
             .chain(teams.as_ref().and_then(|t| t.first_message_unix))
+            .chain(discord.as_ref().and_then(|t| t.first_message_unix))
             .min();
         let last = slack
             .iter()
             .filter_map(|s| s.last_message_unix)
             .chain(teams.as_ref().and_then(|t| t.last_message_unix))
+            .chain(discord.as_ref().and_then(|t| t.last_message_unix))
             .max();
         if let (Some(f), Some(l)) = (first, last) {
             first_all = Some(first_all.map_or(f, |x| x.min(f)));
@@ -506,6 +519,30 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
                 }
                 text
             }
+            SourceKind::Generic if discord.is_some() => {
+                let d = discord.as_ref().unwrap();
+                let mut text = format!(
+                    "A Discord {} with {} across {}, {}{}{}.",
+                    if d.own_messages_only { "data package" } else { "channel export" },
+                    plural(d.messages, "message", "messages"),
+                    plural(d.servers, "server", "servers"),
+                    plural(d.channels, "channel", "channels"),
+                    if d.direct_messages > 0 {
+                        format!(", {}", plural(d.direct_messages, "direct message", "direct messages"))
+                    } else {
+                        String::new()
+                    },
+                    if d.group_messages > 0 {
+                        format!(" and {}", plural(d.group_messages, "group chat", "group chats"))
+                    } else {
+                        String::new()
+                    }
+                );
+                if d.own_messages_only {
+                    text.push_str(" It holds only the messages written by the account that requested it.");
+                }
+                text
+            }
             SourceKind::Generic => match &teams {
                 Some(t) if t.messages > 0 => format!(
                     "A Microsoft Teams export with {} across {}, {} and {}, from {}{}.",
@@ -546,6 +583,7 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
             }),
             linkage: linkages[i].clone(),
             teams,
+            discord,
             explanation,
             formats: col_formats[i]
                 .iter()
@@ -741,6 +779,7 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
                 .iter()
                 .map(|s| &s.monthly_activity)
                 .chain(c.teams.iter().map(|t| &t.monthly_activity))
+                .chain(c.discord.iter().map(|t| &t.monthly_activity))
         })
         .flat_map(|m| m.iter())
         .fold(BTreeMap::new(), |mut acc, (k, v)| {
@@ -864,6 +903,9 @@ fn platforms_of(
     if inv.teams[c.id as usize].is_teams() {
         add("teams");
     }
+    if inv.discord[c.id as usize].is_discord() {
+        add("discord");
+    }
     if has_mail && c.source_kind != SourceKind::SlackExport {
         add("email");
     }
@@ -912,10 +954,12 @@ fn linkages(inv: &Inventory, col_hashes: &[Vec<&str>]) -> Vec<Linkage> {
     }
     // Direct ties between items.
     let mut direct = vec![0u64; n];
+    let mut pairs: HashSet<(usize, usize)> = HashSet::new();
     let mut tie = |a: u32, b: u32| {
         if a != b && (a as usize) < n && (b as usize) < n {
             direct[a as usize] += 1;
             direct[b as usize] += 1;
+            pairs.insert((a.min(b) as usize, a.max(b) as usize));
         }
     };
     for c in &inv.collections {
@@ -930,6 +974,7 @@ fn linkages(inv: &Inventory, col_hashes: &[Vec<&str>]) -> Vec<Linkage> {
         inv.teams[i as usize]
             .overlaps_with()
             .iter()
+            .chain(inv.discord[i as usize].overlaps_with().iter())
             .for_each(|&o| tie(i, o));
     }
     let mut hash_owner: HashMap<&str, u32> = HashMap::new();
@@ -970,6 +1015,7 @@ fn linkages(inv: &Inventory, col_hashes: &[Vec<&str>]) -> Vec<Linkage> {
             &inv.slack[c].sources,
             &inv.text[c].sources,
             &inv.teams[c].sources,
+            &inv.discord[c].sources,
         ] {
             for st in tally.by_service.values() {
                 t.extend(st.targets.iter().map(|x| x.to_ascii_lowercase()));
@@ -1003,21 +1049,24 @@ fn linkages(inv: &Inventory, col_hashes: &[Vec<&str>]) -> Vec<Linkage> {
     let range = |i: usize| -> Option<(i64, i64)> {
         let s = inv.slack[i].inventories();
         let t = inv.teams[i].inventory();
+        let d = inv.discord[i].inventory();
         let f = s
             .iter()
             .filter_map(|x| x.first_message_unix)
             .chain(t.as_ref().and_then(|x| x.first_message_unix))
+            .chain(d.as_ref().and_then(|x| x.first_message_unix))
             .min()?;
         let l = s
             .iter()
             .filter_map(|x| x.last_message_unix)
             .chain(t.as_ref().and_then(|x| x.last_message_unix))
+            .chain(d.as_ref().and_then(|x| x.last_message_unix))
             .max()?;
         Some((f, l))
     };
     let ranges: Vec<Option<(i64, i64)>> = (0..n).map(range).collect();
 
-    (0..n)
+    let mut out: Vec<Linkage> = (0..n)
         .map(|i| {
             let f = &inv.text[i].fingerprint;
             let shared_people = f.people.iter().filter(|k| people[k] > 1).count() as u64;
@@ -1084,7 +1133,109 @@ fn linkages(inv: &Inventory, col_hashes: &[Vec<&str>]) -> Vec<Linkage> {
             }
             l
         })
-        .collect()
+        .collect();
+
+    // Group items by what connects them, pair by pair. A group of items that
+    // only connect to each other (for example two exports from another
+    // company) is not vouched for by the main body of data.
+    let fps: Vec<&crate::analyze::fingerprint::Fingerprint> =
+        inv.text.iter().map(|t| &t.fingerprint).collect();
+    let connected = |a: usize, b: usize| -> bool {
+        if pairs.contains(&(a.min(b), a.max(b))) {
+            return true;
+        }
+        let (x, y) = (fps[a], fps[b]);
+        x.people.iter().any(|k| y.people.contains(k))
+            || x.addresses.iter().any(|k| y.addresses.contains(k))
+            || x.orgs.iter().any(|k| y.orgs.contains(k))
+            || terms[a].intersection(&terms[b]).count() >= 8
+    };
+    let mut group: Vec<usize> = (0..n).collect();
+    fn root(g: &mut [usize], mut i: usize) -> usize {
+        while g[i] != i {
+            g[i] = g[g[i]];
+            i = g[i];
+        }
+        i
+    }
+    for a in 0..n {
+        for b in a + 1..n {
+            if out[a].status != "unknown" && out[b].status != "unknown" && connected(a, b) {
+                let (ra, rb) = (root(&mut group, a), root(&mut group, b));
+                if ra != rb {
+                    group[ra] = rb;
+                }
+            }
+        }
+    }
+    let roots: Vec<usize> = (0..n).map(|i| root(&mut group, i)).collect();
+    // The main data: the group with the most items, then the most files.
+    let files_of = |i: usize| {
+        inv.items
+            .iter()
+            .filter(|it| it.collection as usize == i)
+            .count()
+    };
+    let mut sizes: HashMap<usize, (usize, usize)> = HashMap::new();
+    for i in 0..n {
+        if out[i].status == "unknown" {
+            continue;
+        }
+        let e = sizes.entry(roots[i]).or_default();
+        e.0 += 1;
+        e.1 += files_of(i);
+    }
+    let main = sizes
+        .iter()
+        .max_by_key(|(r, s)| (**s, std::cmp::Reverse(**r)))
+        .map(|(r, _)| *r);
+    if let Some(main) = main {
+        let main_items: Vec<usize> = (0..n)
+            .filter(|&i| roots[i] == main && out[i].status != "unknown")
+            .collect();
+        for i in 0..n {
+            if roots[i] == main || out[i].status == "unknown" || main_items.is_empty() {
+                continue;
+            }
+            // Only flag a group that shows whose data it is (people,
+            // addresses, domains or distinctive names), not one that is
+            // merely thin, such as a mailbox without readable headers.
+            let shows_identity = (0..n).filter(|&j| roots[j] == roots[i]).any(|j| {
+                let f = fps[j];
+                f.people.len() + f.addresses.len() >= 3
+                    || !f.orgs.is_empty()
+                    || terms[j].len() >= 20
+            });
+            if !shows_identity {
+                continue;
+            }
+            let mates: Vec<String> = (0..n)
+                .filter(|&j| j != i && roots[j] == roots[i])
+                .map(|j| inv.collections[j].label.clone())
+                .collect();
+            if mates.is_empty() && out[i].status != "linked" {
+                continue; // already weak or unlinked, with its own explanation
+            }
+            let dates = ranges[i].and_then(|(a, b)| {
+                let m: Vec<(i64, i64)> = main_items.iter().filter_map(|&j| ranges[j]).collect();
+                (!m.is_empty()).then(|| m.iter().any(|&(c, d)| a <= d && c <= b))
+            });
+            out[i].dates_overlap = dates;
+            if mates.is_empty() {
+                out[i].status = "weak";
+                out[i].explanation = "Only loosely connected: no single item shares people, email addresses or domains with it.".to_string();
+            } else {
+                out[i].status = "unlinked";
+                out[i].explanation = format!(
+                    "Only connected to {}: together they share no people, email addresses, domains or names with the rest of your data{}. Check that {} to the same organisation.",
+                    mates.join(", "),
+                    if dates == Some(false) { ", and their dates don't overlap" } else { "" },
+                    if mates.len() == 1 { "both belong" } else { "they belong" }
+                );
+            }
+        }
+    }
+    out
 }
 
 /// For every item: which other items hold the same Slack messages or
@@ -1110,11 +1261,21 @@ fn collection_overlaps(
             }
         }
     }
-    // Shared Teams messages, the same way.
+    // Shared Teams and Discord messages, the same way.
     for c in &inv.collections {
-        if let Some(tm) = inv.teams[c.id as usize].inventory() {
-            messages[c.id as usize] += tm.messages;
-            for (&other, &k) in &tm.overlap_by_collection {
+        let i = c.id as usize;
+        let chats = inv.teams[i]
+            .inventory()
+            .map(|t| (t.messages, t.overlap_by_collection))
+            .into_iter()
+            .chain(
+                inv.discord[i]
+                    .inventory()
+                    .map(|d| (d.messages, d.overlap_by_collection)),
+            );
+        for (count, overlap) in chats {
+            messages[i] += count;
+            for (&other, &k) in &overlap {
                 if other == c.id || other as usize >= n {
                     continue;
                 }
@@ -1174,7 +1335,9 @@ fn collection_overlaps(
             };
             // An item is covered only as far as all of it is: its emails
             // and its other files.
-            let chat = c.source_kind == SourceKind::SlackExport || inv.teams[i].is_teams();
+            let chat = c.source_kind == SourceKind::SlackExport
+                || inv.teams[i].is_teams()
+                || inv.discord[i].is_discord();
             let share = if chat && messages[i] > 0 {
                 language::pct(sm.min(messages[i]), messages[i])
             } else if emails[i] > 0 {
@@ -1381,6 +1544,11 @@ fn source_entries(inv: &Inventory) -> Vec<SourceEntry> {
             s.collections = [c.id].into_iter().collect();
         }
         all.merge(&teams);
+        let mut discord = inv.discord[i].sources.clone();
+        for s in discord.by_service.values_mut() {
+            s.collections = [c.id].into_iter().collect();
+        }
+        all.merge(&discord);
         all.merge(&inv.text[i].sources);
     }
     // Sources whose data is already in the assessment.
@@ -1545,11 +1713,14 @@ fn language_summary(inv: &Inventory) -> LanguageSummary {
         let slack = &inv.slack[i].languages;
         let docs = &inv.text[i].languages;
         let teams = &inv.teams[i].languages;
+        let discord = &inv.discord[i].languages;
         let (tally, basis) = if slack.determined_words() + slack.undetermined_words > 0
             || teams.determined_words() + teams.undetermined_words > 0
+            || discord.determined_words() + discord.undetermined_words > 0
         {
             let mut t = slack.clone();
             t.merge(teams);
+            t.merge(discord);
             t.merge(docs);
             (t, "messages")
         } else {

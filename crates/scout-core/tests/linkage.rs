@@ -177,3 +177,82 @@ fn public_domains_alone_do_not_link_and_tiny_items_are_unknown() {
     assert_ne!(col(&map, "b").linkage.status, "linked");
     assert_eq!(col(&map, "c").linkage.status, "unknown");
 }
+
+/// A Discord "Request your data" package for the same unrelated company.
+fn discord_package(d: &Path) -> PathBuf {
+    let user = json!({"id": "9", "username": "dev.pixpaint", "global_name": "Dev Shah", "email": "dev@pixpaint.example"});
+    let index = json!({"11": "general", "12": null});
+    let general = json!({"id": "11", "type": "GUILD_TEXT", "name": "general", "guild": {"id": "G1", "name": "PixPaint"}});
+    let dm = json!({"id": "12", "type": "DM", "recipients": ["9", "8"]});
+    let msgs = json!([
+        {"ID": "100", "Timestamp": "2026-04-01 09:00:00", "Contents": "The PixPaint Brushwork build is green.", "Attachments": ""},
+        {"ID": "101", "Timestamp": "2026-04-02 09:00:00", "Contents": "Brushwork notes are in the PixPaint wiki.", "Attachments": "https://cdn.discordapp.com/attachments/1/2/a.png"}
+    ]);
+    let csv = "ID,Timestamp,Contents,Attachments\n200,2026-04-03 10:00:00,\"hi, Noor\",\n";
+    write(
+        d,
+        "pixpaint-discord.zip",
+        &zip_bytes(&[
+            ("Account/user.json", user.to_string().as_bytes()),
+            ("Messages/index.json", index.to_string().as_bytes()),
+            ("Messages/c11/channel.json", general.to_string().as_bytes()),
+            ("Messages/c11/messages.json", msgs.to_string().as_bytes()),
+            ("Messages/c12/channel.json", dm.to_string().as_bytes()),
+            ("Messages/c12/messages.csv", csv.as_bytes()),
+            ("Servers/index.json", br#"{"G1": "PixPaint"}"#),
+        ]),
+    )
+}
+
+#[test]
+fn a_group_of_unrelated_exports_is_flagged_together() {
+    let d = tempdir("linkage-group");
+    let slack = slack_export(&d);
+    write(
+        &d,
+        "inbox.mbox",
+        b"From x Mon\nFrom: Ann Lee <ann@acme.com>\nTo: bo@acme.com\nCc: cy@acme.com\nSubject: Hydra\n\nThe Hydra plan for Contoso.\n\n",
+    );
+    write(
+        &d,
+        "docs/plan.md",
+        b"# Plan\nAsk ann@acme.com about the Hydra launch for Contoso.\n",
+    );
+    let teams = teams_export(&d);
+    let discord = discord_package(&d);
+    let inv = scan(
+        &[slack, d.join("inbox.mbox"), d.join("docs"), teams, discord],
+        ScanOptions::default(),
+    );
+    let map = build_data_map(&inv);
+
+    let dc = col(&map, "pixpaint-discord.zip");
+    assert_eq!(dc.platforms, vec!["discord"]);
+    let di = dc.discord.as_ref().unwrap();
+    assert_eq!(
+        (di.messages, di.servers, di.channels, di.direct_messages),
+        (3, 1, 1, 1)
+    );
+    assert!(di.own_messages_only);
+    assert!(dc
+        .explanation
+        .contains("only the messages written by the account"));
+
+    // Teams and Discord vouch for each other, but not for the main data.
+    for label in ["pixpaint-teams.zip", "pixpaint-discord.zip"] {
+        let l = &col(&map, label).linkage;
+        assert_eq!(l.status, "unlinked", "{label}: {l:?}");
+        assert!(
+            l.explanation.starts_with("Only connected to"),
+            "{}",
+            l.explanation
+        );
+    }
+    assert_eq!(col(&map, "acme-slack.zip").linkage.status, "linked");
+    assert_eq!(col(&map, "inbox.mbox").linkage.status, "linked");
+    assert_eq!(col(&map, "docs").linkage.status, "linked");
+    // Slack 2 + email 1 + Teams 2 + Discord 3, each counted once.
+    assert_eq!(map.totals.unique_records, 8);
+    let json = serde_json::to_string(&map).unwrap();
+    assert!(!json.contains("Brushwork") && !json.contains("dev.pixpaint"));
+}

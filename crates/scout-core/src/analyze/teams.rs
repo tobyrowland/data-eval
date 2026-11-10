@@ -55,7 +55,7 @@ pub struct TeamsRecogniser {
 }
 
 /// Seconds since 1970 from an ISO-8601 time such as 2026-10-30T11:39:00.918Z.
-fn parse_time(s: &str) -> Option<i64> {
+pub fn parse_time(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || (b[10] != b'T' && b[10] != b' ') {
         return None;
