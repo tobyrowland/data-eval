@@ -660,4 +660,15 @@ body.dragging .drag-veil-card { transform: scale(1); }
 .adding-ring.small { width: 22px; height: 22px; border-width: 3px; flex: none; }
 .tv-pane-head { align-items: flex-end; }
 .report-preview-head { margin: 14px 0 4px; }
+/* The report panel fills the window: the preview takes the spare height and
+   scrolls, so the buttons are always visible whatever the window size. */
+#report-panel { overflow: hidden; }
+#report-panel .panel-inner { height: 100%; display: flex; flex-direction: column; padding-bottom: 20px; }
+#report-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#report-body > * { flex: none; }
+#report-body h2 { padding-right: 40px; }
+#report-body .guide-callout { font-size: 13px; padding: 10px 14px; }
+#report-body .report-preview { flex: 1 1 auto; min-height: 80px; max-height: none; margin: 0; }
+.report-actions { flex-wrap: wrap; padding-top: 12px; border-top: 1px solid var(--line); }
+.report-actions > div { display: flex; flex-wrap: wrap; gap: 8px; }
 .report-preview { max-height: 42vh; overflow: auto; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
