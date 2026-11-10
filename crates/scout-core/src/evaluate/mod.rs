@@ -380,6 +380,38 @@ impl Evaluator {
         for d in minhash::near_duplicates(&self.sigs, 0.7) {
             self.docs[d].duplicate = true;
         }
+        let mut dist = Distributions::default();
+        for d in &self.docs {
+            let usable = !d.duplicate && d.quality >= 0.5 && d.human && d.kind != Kind::Machine;
+            if usable {
+                if let Some(y) = d.year {
+                    *dist.usable_tokens_by_year.entry(y).or_default() += d.tokens;
+                }
+            }
+            if !matches!(d.kind, Kind::Code | Kind::Structured) {
+                let band = ((d.quality * 10.0).floor() as usize).min(9);
+                dist.tokens_by_quality_band[band] += d.tokens;
+            }
+            let len = match d.tokens {
+                0..=49 => 0,
+                50..=199 => 1,
+                200..=999 => 2,
+                1_000..=4_999 => 3,
+                5_000..=19_999 => 4,
+                _ => 5,
+            };
+            dist.documents_by_length[len] += 1;
+            if d.kind == Kind::Conversation {
+                let t = match d.turns {
+                    0..=1 => 0,
+                    2..=3 => 1,
+                    4..=10 => 2,
+                    11..=50 => 3,
+                    _ => 4,
+                };
+                dist.conversations_by_turns[t] += 1;
+            }
+        }
         let mut rows: BTreeMap<(u32, Kind), EvalRow> = BTreeMap::new();
         for d in &self.docs {
             let r = rows.entry((d.col, d.kind)).or_insert_with(|| EvalRow {
@@ -508,6 +540,7 @@ impl Evaluator {
             rating,
             rating_reason,
             not_evaluated: not,
+            distributions: dist,
             incomplete,
             seconds,
         }
@@ -580,9 +613,24 @@ pub struct Evaluation {
     pub rating: &'static str,
     pub rating_reason: &'static str,
     pub not_evaluated: NotEvaluated,
+    pub distributions: Distributions,
     pub incomplete: bool,
     pub seconds: u64,
 }
+
+/// How the text is spread, for the detailed report.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct Distributions {
+    pub usable_tokens_by_year: BTreeMap<i32, u64>,
+    /// Tokens by quality score band: 0.0–0.1, 0.1–0.2, … 0.9–1.0 (prose only).
+    pub tokens_by_quality_band: [u64; 10],
+    /// Documents by length in tokens: <50, 50–199, 200–999, 1k–5k, 5k–20k, 20k+.
+    pub documents_by_length: [u64; 6],
+    /// Conversations by messages: 1, 2–3, 4–10, 11–50, 51+.
+    pub conversations_by_turns: [u64; 5],
+}
+
+pub mod wm_report;
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct EvalRow {

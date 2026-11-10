@@ -166,7 +166,11 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
    flagged "Only connected to …". A group is only flagged when it shows
    whose data it is (people, addresses, domains or distinctive names), not
    when it is merely thin.
-3. **Training value** (run on demand: *Evaluate training value*). A second
+3. **Training value**, on its own tab. Under the map, a slim card offers
+   *Evaluate training value*. Pressing it opens a **Training value** tab
+   with live progress, and once results exist the card summarises them
+   ("Medium · about 2.3M usable tokens · View"). The tab disappears again
+   when the data changes. The evaluation itself is a second
    pass reads every readable document in full, on this computer, and
    measures its value as training data for AI models.
    - **What counts as a document:** a chat conversation (a Slack
@@ -194,6 +198,26 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
      are marked incomplete), at roughly 100 MB/s of mail on a laptop. The
      result goes into the saved map. `working-minds evaluate <inputs>` does
      the same from the command line.
+   **Send report to Working Minds** (on the Training value tab) builds a
+   detailed Markdown report written to be read by an LLM. It contains:
+   - how to read it, the method and the definitions
+   - a summary, and dimension scores out of 100 with their basis and
+     weights: volume, uniqueness, human share, pre-LLM share, quality,
+     conversation share and completeness
+   - the breakdown by platform and kind
+   - distributions: usable tokens by year, quality bands, document
+     lengths, conversation lengths and languages
+   - the items, gaps and owner decisions
+   - the same figures as a JSON appendix
+
+   It holds measurements, the company name and item names only; never
+   messages, addresses, people's names or file paths. The panel previews
+   it, then offers *Open email to Working Minds*, *Save file only* and
+   *Copy report*. *Open email* saves the file to Documents › Working
+   Minds, opens the owner's email program addressed to Working Minds with
+   a short summary, and shows the file to attach. The app itself never
+   sends anything. `working-minds evaluate … --report report.md` writes
+   the same report.
 4. **Analysis:** collections, coverage, file formats and languages tables,
    plus activity over time.
 

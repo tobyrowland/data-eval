@@ -224,6 +224,8 @@
     const pct = cov.content_examined_percent ?? 0;
     const sp = span(map);
     const plan = normalisePlan(extra.plan);
+    const showTabs = !!(extra.evaluation || extra.evaluating);
+    if (!showTabs) activeTab = "map";
     // The company: the owner's own name if they set one, else the detected one.
     const company = plan.company ? { name: plan.company, confidence: "set", evidence: [] } : map.company || null;
     const M = mapSvg(map, plan, company);
@@ -256,7 +258,11 @@
         </div>
       </div>
       ${extra.banner || ""}
-
+      ${showTabs ? `<div class="tabs" role="tablist">
+        <button role="tab" class="tab ${activeTab === "map" ? "on" : ""}" data-tab="map" aria-selected="${activeTab === "map"}">Data map</button>
+        <button role="tab" class="tab ${activeTab === "training" ? "on" : ""}" data-tab="training" aria-selected="${activeTab === "training"}">Training value${extra.evaluating ? ` <span class="tab-dot" aria-hidden="true"></span>` : ""}</button>
+      </div>` : ""}
+      <div class="tab-pane" data-pane="map" ${activeTab === "map" ? "" : "hidden"}>
       <section class="card hero reveal" style="animation-delay:60ms">
         <div class="hero-top">
           <p class="hero-lead">${esc(lead)}</p>
@@ -274,6 +280,8 @@
         </div>
       </section>
 
+      <div id="tv-card" class="reveal" style="animation-delay:200ms"></div>
+
       <section class="section reveal" style="animation-delay:250ms">
         <div class="section-head">
           <div><h2>Your platforms</h2><p>What you've collected from each platform, the items in it and their stats, and what your data points to that's still missing. Remove duplicates and anything that isn't yours.</p></div>
@@ -284,10 +292,6 @@
         <div id="next-steps"></div>
       </section>
 
-      <section class="section reveal" style="animation-delay:330ms">
-        <div class="section-head"><div><h2>Training value</h2><p>How much of your data is useful for training AI models, measured document by document on this computer.</p></div></div>
-        <div id="training-value"></div>
-      </section>
 
       <section class="section reveal" style="animation-delay:400ms">
         <div class="section-head"><div><h2>Analysis</h2><p>What is in the data you added, measured on this computer. Every file is counted, including those we can't read yet.</p></div></div>
@@ -299,6 +303,14 @@
         ${T ? formatsCard() : ""}
         ${languagesBlock()}
       </section>
+      </div>
+      <div class="tab-pane" data-pane="training" ${activeTab === "training" ? "" : "hidden"}>
+        <div class="section-head tv-pane-head">
+          <div><h2>Training value</h2><p>How much of your data is useful for training AI models, measured document by document on this computer.</p></div>
+          <div class="section-actions"><button class="btn primary" data-act="send-report" ${extra.evaluation ? "" : "disabled"}>Send report to Working Minds</button></div>
+        </div>
+        <div id="training-value"></div>
+      </div>
       <div class="privacy-foot reveal" style="animation-delay:600ms"><span class="status-dot"></span>${esc(map.privacy.statement)}</div>
     `;
 
@@ -476,8 +488,11 @@
     root.querySelectorAll('[data-act="adddata"]').forEach((b) => (b.onclick = () => handlers.onAddData(b)));
     const steps = root.querySelector("#next-steps");
     const redraw = () => renderNextSteps(steps, map, plan, handlers, redraw, extra || {});
-    const tvHost = root.querySelector("#training-value");
-    renderTraining(tvHost, map, extra.evaluation || null, handlers, extra.evaluating || null);
+    renderTraining(root.querySelector("#training-value"), map, extra.evaluation || null, handlers, extra.evaluating || null);
+    renderTvCard(root.querySelector("#tv-card"), map, extra.evaluation || null, extra.evaluating || null, handlers);
+    root.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
+    const send = root.querySelector('[data-act="send-report"]');
+    if (send) send.onclick = () => handlers.onSendReport && handlers.onSendReport();
     root.querySelector('[data-act="addsource"]').onclick = (e) => openSourcePicker(e.currentTarget, map, plan, () => { handlers.onPlan(plan); redraw(); });
     redraw();
   }
@@ -502,6 +517,8 @@
   // collected yet.
   const PLATFORM_NAMES = { slack: "Slack", teams: "Microsoft Teams", discord: "Discord", email: "Email", google_drive: "Google Drive", google_other: "Google (other products)", github: "GitHub", gitlab: "GitLab", bitbucket: "Bitbucket" };
   const PLATFORM_ORDER = ["slack", "teams", "discord", "email", "google_drive", "google_other", "github", "gitlab", "bitbucket"];
+  // Which tab is showing, kept across redraws.
+  let activeTab = "map";
   // Item rows whose file tree is open, kept across redraws.
   const openTrees = new Set();
 
@@ -1004,5 +1021,31 @@
     requestAnimationFrame(step);
   }
 
-  window.ScoutMap = { render, bytes, num, esc, renderTraining };
+  /** Shows the Data map or the Training value tab. */
+  function setTab(tab) {
+    activeTab = tab;
+    document.querySelectorAll("[data-tab]").forEach((b) => { b.classList.toggle("on", b.dataset.tab === tab); b.setAttribute("aria-selected", String(b.dataset.tab === tab)); });
+    document.querySelectorAll("[data-pane]").forEach((p) => (p.hidden = p.dataset.pane !== tab));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  /** The slim training-value card on the Data map tab. */
+  function renderTvCard(host, map, ev, state, handlers) {
+    if (!host) return;
+    if (state && state.running) {
+      const p = state.progress || {};
+      host.innerHTML = `<div class="card tv-slim"><div class="adding-ring small" aria-hidden="true"></div><span><b>Evaluating training value…</b> ${num(p.documents || 0)} documents measured</span><button class="btn ghost small" data-tvc="view">View progress</button></div>`;
+    } else if (ev) {
+      const rating = { high: "High", medium: "Medium", low: "Low" }[ev.rating] || ev.rating;
+      host.innerHTML = `<div class="card tv-slim"><span class="pill tv-${esc(ev.rating)}">${esc(rating)}</span><span><b>Training value:</b> about <b>${compact(ev.totals.usable_tokens)}</b> usable tokens of human-written text</span><button class="btn secondary small" data-tvc="view">View →</button></div>`;
+    } else {
+      host.innerHTML = `<div class="card tv-slim"><span><b>How much of this is useful for training AI models?</b> <span class="muted">Measured on this computer · ${esc(evaluationEstimate(map))}</span></span><button class="btn primary small" data-tvc="run">Evaluate training value</button></div>`;
+    }
+    const view = host.querySelector('[data-tvc="view"]');
+    if (view) view.onclick = () => setTab("training");
+    const run = host.querySelector('[data-tvc="run"]');
+    if (run) run.onclick = () => handlers.onEvaluate && handlers.onEvaluate();
+  }
+
+  window.ScoutMap = { render, bytes, num, esc, renderTraining, renderTvCard, setTab };
 })();

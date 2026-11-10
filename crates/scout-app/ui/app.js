@@ -275,25 +275,62 @@
     if (evalState.running || assessing) return;
     evalState.running = true;
     evalState.progress = null;
-    const draw = (ev) => { const h = evalHost(); if (h) window.ScoutMap.renderTraining(h, currentMap || map, ev, { onEvaluate: () => runEvaluation(currentMap || map), onStopEvaluate: () => invoke("stop") }, evalState.running ? evalState : null); };
-    draw(null);
+    window.ScoutMap.setTab && window.ScoutMap.setTab("training");
+    await showMap(currentMap || map); // shows the tabs and the progress view
+    window.ScoutMap.setTab("training");
     try {
       const ev = await invoke("evaluate");
       evalState.running = false;
-      draw(ev);
+      await showMap(currentMap || map);
+      window.ScoutMap.setTab("training");
       toast(ev.incomplete ? "Evaluation stopped: the numbers cover what was read." : "Training value evaluated.");
     } catch (err) {
       evalState.running = false;
-      draw(null);
+      await showMap(currentMap || map);
       toast("The evaluation could not finish: " + err);
     }
   }
   listen("scout://evaluate", (e) => {
     if (!evalState.running) return;
     evalState.progress = e.payload;
+    const handlers = { onStopEvaluate: () => invoke("stop") };
     const h = evalHost();
-    if (h) window.ScoutMap.renderTraining(h, currentMap, null, { onStopEvaluate: () => invoke("stop") }, evalState);
+    if (h) window.ScoutMap.renderTraining(h, currentMap, null, handlers, evalState);
+    const card = document.getElementById("tv-card");
+    if (card) window.ScoutMap.renderTvCard(card, currentMap, null, evalState, handlers);
   });
+
+  // ------------------------------------------- report for Working Minds
+  // The owner's own email program sends it; this app never connects anywhere.
+  let reportText = "";
+  async function openReport() {
+    let preview;
+    try { preview = await invoke("wm_report_preview"); } catch (e) { toast(String(e)); return; }
+    reportText = preview.markdown;
+    $("report-body").innerHTML = `
+      <p class="eyebrow">Send to Working Minds</p>
+      <h2>Your detailed assessment report</h2>
+      <p>A full report of the measurements, written so Working Minds can review it with an AI model. Sending it opens your own email program addressed to <b>${esc(preview.email)}</b>, with the report saved in Documents › Working Minds for you to attach. You decide whether to send it.</p>
+      <div class="guide-callout"><b>What it contains</b><br>Your company name, the names of the items you added, and counts, scores and distributions: tokens, quality, duplicates, years, languages, platforms and gaps.<br><b>What it never contains</b><br>Messages, documents, email text, email addresses, people's names or file paths.</div>
+      <div class="report-preview-head"><span class="muted small">Preview · ${num(Math.round(preview.bytes / 1024))} KB</span></div>
+      <pre class="report-preview">${esc(preview.markdown)}</pre>
+      <div class="actions-row"><button class="btn ghost" id="report-copy">Copy report</button><div><button class="btn secondary" id="report-save">Save file only</button> <button class="btn primary" id="report-send">Open email to Working Minds</button></div></div>`;
+    $("report-panel").setAttribute("aria-hidden", "false");
+    $("scrim").classList.add("on");
+    $("report-copy").onclick = async () => {
+      try { await navigator.clipboard.writeText(reportText); toast("Report copied. You can paste it into an email or an AI chat."); }
+      catch (_) { toast("Could not copy; use Save file only instead."); }
+    };
+    const send = async (openEmail) => {
+      try {
+        const path = await invoke("wm_report_send", { openEmail });
+        toast(openEmail ? "Email opened. Attach the report from the folder that just opened." : "Report saved.", { label: "Show in folder", run: () => invoke("reveal", { path }) });
+      } catch (e) { toast("Could not save the report: " + e); }
+    };
+    $("report-send").onclick = () => send(true);
+    $("report-save").onclick = () => send(false);
+  }
+  $("report-close").onclick = () => panel(false);
 
   // ---------------------------------------------------------------- map
   async function showMap(map, banner) {
@@ -323,6 +360,7 @@
       files: fileHandlers,
       onEvaluate: () => runEvaluation(map),
       onStopEvaluate: () => invoke("stop"),
+      onSendReport: () => openReport(),
     }, { banner, plan, linkCounts, removedItems, evaluation, evaluating: evalState.running ? evalState : null });
   }
 
@@ -493,6 +531,7 @@
     $("privacy-panel").setAttribute("aria-hidden", String(!open));
     if (!open) $("guide-panel").setAttribute("aria-hidden", "true");
     if (!open && !packing) $("pack-panel").setAttribute("aria-hidden", "true");
+    if (!open) $("report-panel").setAttribute("aria-hidden", "true");
     $("scrim").classList.toggle("on", open);
   }
   $("privacy-open").onclick = () => panel(true);

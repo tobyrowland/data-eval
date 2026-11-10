@@ -28,6 +28,7 @@ struct AppState {
     removed: Mutex<Vec<String>>,
     /// The latest training-value evaluation, if one was run.
     evaluation: Mutex<Option<serde_json::Value>>,
+    evaluation_full: Mutex<Option<scout_core::evaluate::Evaluation>>,
 }
 
 /// What the Add screen shows for one selection. Only metadata is read here.
@@ -205,6 +206,7 @@ fn finish(
     *state.inventory.lock().unwrap() = Some(inventory);
     // The data changed, so an earlier evaluation no longer applies.
     *state.evaluation.lock().unwrap() = None;
+    *state.evaluation_full.lock().unwrap() = None;
     *state.last.lock().unwrap() = Some((json.clone(), text));
     Ok(json)
 }
@@ -722,13 +724,16 @@ async fn evaluate(app: AppHandle, state: State<'_, AppState>) -> Result<serde_js
                 }
             },
         );
-        serde_json::to_value(&ev).map_err(|e| e.to_string())
+        serde_json::to_value(&ev)
+            .map(|j| (j, ev))
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?;
     *state.cancel.lock().unwrap() = None;
-    let json = result?;
+    let (json, full) = result?;
     *state.evaluation.lock().unwrap() = Some(json.clone());
+    *state.evaluation_full.lock().unwrap() = Some(full);
     Ok(json)
 }
 
@@ -751,20 +756,7 @@ fn stop(state: State<'_, AppState>) {
 fn save_map(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
     let guard = state.last.lock().unwrap();
     let (json, text) = guard.as_ref().ok_or("There is no data map to save yet.")?;
-    let base = match app.path().document_dir() {
-        Ok(d) => d,
-        Err(_) => {
-            let home = app.path().home_dir().map_err(|e| e.to_string())?;
-            let docs = home.join("Documents");
-            if docs.is_dir() {
-                docs
-            } else {
-                home
-            }
-        }
-    };
-    let dir = base.join("Working Minds");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir = output_dir(&app)?;
     let date = json["generated_unix"]
         .as_i64()
         .map(ymd)
@@ -781,6 +773,134 @@ fn save_map(app: AppHandle, state: State<'_, AppState>) -> Result<String, String
     let pretty = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
     std::fs::write(dir.join(format!("{stem}.json")), pretty).map_err(|e| e.to_string())?;
     Ok(txt.display().to_string())
+}
+
+/// Documents › Working Minds, created if needed.
+fn output_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let base = match app.path().document_dir() {
+        Ok(d) => d,
+        Err(_) => {
+            let home = app.path().home_dir().map_err(|e| e.to_string())?;
+            let docs = home.join("Documents");
+            if docs.is_dir() {
+                docs
+            } else {
+                home
+            }
+        }
+    };
+    let dir = base.join("Working Minds");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// Where the detailed report goes. One place, so it is easy to change.
+const WORKING_MINDS_EMAIL: &str = "tobyro@gmail.com";
+
+/// The detailed Working Minds report (Markdown for an LLM), built from the
+/// current assessment and evaluation. Measurements only.
+fn build_wm_report(app: &AppHandle, state: &AppState) -> Result<(String, String, String), String> {
+    let ev = state
+        .evaluation_full
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Evaluate the training value first.")?;
+    let map = {
+        let guard = state.inventory.lock().unwrap();
+        build_data_map(guard.as_ref().ok_or("There is no assessment yet.")?)
+    };
+    let plan = read_plan(app);
+    let own = plan["company"].as_str().map(str::to_string);
+    let company = own
+        .clone()
+        .or_else(|| map.company.as_ref().map(|c| c.name.clone()))
+        .unwrap_or_else(|| "Unknown company".into());
+    let md = scout_core::evaluate::wm_report::wm_report(&map, &ev, own.as_deref(), &plan);
+    let summary = format!(
+        "Training value: {} · about {} usable tokens of {} in total.",
+        ev.rating, ev.totals.usable_tokens, ev.totals.tokens
+    );
+    Ok((md, company, summary))
+}
+
+#[derive(Serialize)]
+struct ReportPreview {
+    markdown: String,
+    bytes: usize,
+    email: &'static str,
+}
+
+#[tauri::command]
+fn wm_report_preview(app: AppHandle, state: State<'_, AppState>) -> Result<ReportPreview, String> {
+    let (markdown, _, _) = build_wm_report(&app, &state)?;
+    Ok(ReportPreview {
+        bytes: markdown.len(),
+        markdown,
+        email: WORKING_MINDS_EMAIL,
+    })
+}
+
+/// Saves the report, opens the owner's email program addressed to Working
+/// Minds and shows the file to attach. The app itself sends nothing.
+#[tauri::command]
+fn wm_report_send(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    open_email: bool,
+) -> Result<String, String> {
+    let (md, company, summary) = build_wm_report(&app, &state)?;
+    let dir = output_dir(&app)?;
+    let safe: String = company
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let file = dir.join(format!(
+        "Working Minds report - {} - {}.md",
+        safe.trim(),
+        ymd(now)
+    ));
+    std::fs::write(&file, md).map_err(|e| e.to_string())?;
+    if open_email {
+        let name = file
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let subject = format!("Working Minds data assessment - {company}");
+        let body = format!(
+            "Hello Working Minds,\n\nPlease find attached our data assessment for {company}.\n{summary}\n\nThe full report is attached as \"{name}\". It contains measurements only: no messages, documents, email addresses or people's names.\n"
+        );
+        let url = format!(
+            "mailto:{WORKING_MINDS_EMAIL}?subject={}&body={}",
+            percent(&subject),
+            percent(&body)
+        );
+        tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())?;
+    }
+    let _ = tauri_plugin_opener::reveal_item_in_dir(&file);
+    Ok(file.display().to_string())
+}
+
+/// Percent-encoding for a mailto: link.
+fn percent(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 /// Where the companion Attachment Downloader is published. Opening it hands
@@ -840,6 +960,8 @@ fn main() {
             stop,
             evaluate,
             evaluation_result,
+            wm_report_preview,
+            wm_report_send,
             list_files,
             linking_files,
             link_file_counts,
