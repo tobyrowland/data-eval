@@ -113,6 +113,65 @@ pub fn json(r: &mut dyn Read, max_bytes: usize) -> io::Result<Outcome> {
     }
 }
 
+/// Reads a small CSV with a header row into JSON objects (one per row,
+/// keyed by header), for recognisers that need the rows themselves, such
+/// as a Discord package's `messages.csv`. Larger files are only counted.
+pub fn csv_rows(r: &mut dyn Read, max_bytes: usize) -> io::Result<Outcome> {
+    let buf = read_head(r, max_bytes + 1)?;
+    if buf.len() > max_bytes {
+        let mut o = delimited(&mut &buf[..max_bytes], b',')?;
+        o.status = Status::PartlyAssessed;
+        o.reason = Some(Reason::ObjectTooLarge);
+        return Ok(o);
+    }
+    let text = String::from_utf8_lossy(&buf);
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut field = String::new();
+    let mut quoted = false;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (c, quoted) {
+            ('"', true) if chars.peek() == Some(&'"') => {
+                field.push('"');
+                chars.next();
+            }
+            ('"', _) => quoted = !quoted,
+            (',', false) => row.push(std::mem::take(&mut field)),
+            ('\r', false) => {}
+            ('\n', false) => {
+                row.push(std::mem::take(&mut field));
+                if row.iter().any(|f| !f.is_empty()) {
+                    rows.push(std::mem::take(&mut row));
+                } else {
+                    row.clear();
+                }
+            }
+            (c, _) => field.push(c),
+        }
+    }
+    if !field.is_empty() || !row.is_empty() {
+        row.push(field);
+        rows.push(row);
+    }
+    let mut it = rows.into_iter();
+    let header = it.next().unwrap_or_default();
+    let objs: Vec<serde_json::Value> = it
+        .map(|r| {
+            serde_json::Value::Object(
+                header
+                    .iter()
+                    .cloned()
+                    .zip(r.into_iter().map(serde_json::Value::String))
+                    .collect(),
+            )
+        })
+        .collect();
+    let mut o = Outcome::assessed(Some(objs.len() as u64));
+    o.json = Some(serde_json::Value::Array(objs));
+    Ok(o)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

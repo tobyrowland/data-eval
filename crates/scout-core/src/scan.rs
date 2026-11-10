@@ -54,6 +54,9 @@ pub struct TextTotals {
     /// Of those, emails already seen earlier (in this or another
     /// collection), by the collection that had them first.
     pub email_overlap: BTreeMap<u32, u64>,
+    /// Who and what this collection is about, to tell whether it seems
+    /// connected to the rest. Local only.
+    pub fingerprint: crate::analyze::fingerprint::Fingerprint,
 }
 
 /// The private local result of a scan. Contains local paths and hashes and
@@ -62,6 +65,8 @@ pub struct Inventory {
     pub items: Vec<Item>,
     pub collections: Vec<Collection>,
     pub slack: Vec<SlackRecogniser>,
+    pub teams: Vec<crate::analyze::teams::TeamsRecogniser>,
+    pub discord: Vec<crate::analyze::discord::DiscordRecogniser>,
     pub text: Vec<TextTotals>,
     pub limits_reached: BTreeSet<Reason>,
     pub expanded_bytes_read: u64,
@@ -73,6 +78,9 @@ pub struct Inventory {
     pub attachments: std::collections::BTreeMap<String, Vec<u64>>,
     /// Slack messages seen so far, so overlapping exports count once.
     pub slack_seen: crate::analyze::slack::SeenMessages,
+    /// Teams and Discord messages seen so far (keyed by conversation and
+    /// message ID), so a message in two files or exports counts once.
+    pub teams_seen: crate::analyze::teams::SeenTeamsMessages,
     /// Links to known services per item, by service. Local only: shows
     /// which files tie an item to a source.
     pub links_by_item: HashMap<u64, BTreeMap<&'static str, u32>>,
@@ -97,12 +105,15 @@ struct Scanner<'p> {
     items: Vec<Item>,
     collections: Vec<Collection>,
     slack: Vec<SlackRecogniser>,
+    teams: Vec<crate::analyze::teams::TeamsRecogniser>,
+    discord: Vec<crate::analyze::discord::DiscordRecogniser>,
     text: Vec<TextTotals>,
     budget: Budget,
     records_total: u64,
     limits_reached: BTreeSet<Reason>,
     attachments: std::collections::BTreeMap<String, Vec<u64>>,
     slack_seen: crate::analyze::slack::SeenMessages,
+    teams_seen: crate::analyze::teams::SeenTeamsMessages,
     links_by_item: HashMap<u64, BTreeMap<&'static str, u32>>,
     mail_seen: HashMap<u64, u32>,
 }
@@ -153,11 +164,14 @@ pub fn extend_scan(
         items: Vec::new(),
         collections: Vec::new(),
         slack: Vec::new(),
+        teams: Vec::new(),
+        discord: Vec::new(),
         text: Vec::new(),
         records_total: 0,
         limits_reached: BTreeSet::new(),
         attachments: Default::default(),
         slack_seen: Default::default(),
+        teams_seen: Default::default(),
         links_by_item: Default::default(),
         mail_seen: Default::default(),
     };
@@ -170,6 +184,9 @@ pub fn extend_scan(
         s.limits_reached = p.limits_reached;
         s.attachments = p.attachments;
         s.slack_seen = p.slack_seen;
+        s.teams = p.teams;
+        s.discord = p.discord;
+        s.teams_seen = p.teams_seen;
         s.links_by_item = p.links_by_item;
         s.mail_seen = p.mail_seen;
         s.limits_reached.remove(&Reason::StoppedByUser);
@@ -197,6 +214,8 @@ pub fn extend_scan(
             source: input.clone(),
         });
         s.slack.push(SlackRecogniser::default());
+        s.teams.push(Default::default());
+        s.discord.push(Default::default());
         s.text.push(TextTotals::default());
         // Logical paths start with the selection's own name, as before.
         s.visit_path(input, base, collection);
@@ -218,6 +237,8 @@ pub fn extend_scan(
         items: s.items,
         collections: s.collections,
         slack: s.slack,
+        teams: s.teams,
+        discord: s.discord,
         text: s.text,
         limits_reached: s.limits_reached,
         limits: s.opts.limits,
@@ -225,6 +246,7 @@ pub fn extend_scan(
         assessment_id,
         attachments: s.attachments,
         slack_seen: s.slack_seen,
+        teams_seen: s.teams_seen,
         links_by_item: s.links_by_item,
         exclude: s.opts.exclude.clone(),
         mail_seen: s.mail_seen,
@@ -262,6 +284,8 @@ pub fn update_scan(
                     .overlaps_with()
                     .iter()
                     .chain(prev.text[id as usize].email_overlap.keys())
+                    .chain(prev.teams[id as usize].overlaps_with().iter())
+                    .chain(prev.discord[id as usize].overlaps_with().iter())
                     .any(|o| *o != id && dropped.contains(o))
             })
             .collect();
@@ -308,7 +332,16 @@ impl Inventory {
         let mut collections = Vec::new();
         let mut slack = Vec::new();
         let mut text = Vec::new();
-        for ((mut c, mut s), mut t) in self.collections.into_iter().zip(self.slack).zip(self.text) {
+        let mut teams = Vec::new();
+        let mut discord = Vec::new();
+        for ((((mut c, mut s), mut t), mut tm), mut dc) in self
+            .collections
+            .into_iter()
+            .zip(self.slack)
+            .zip(self.text)
+            .zip(self.teams)
+            .zip(self.discord)
+        {
             let Some(&n) = cmap.get(&c.id) else {
                 continue;
             };
@@ -319,9 +352,13 @@ impl Inventory {
                 .into_iter()
                 .filter_map(|(k, v)| cmap.get(&k).map(|&n| (n, v)))
                 .collect();
+            tm.renumber_collections(&cmap);
+            dc.renumber_collections(&cmap);
+            discord.push(dc);
             collections.push(c);
             slack.push(s);
             text.push(t);
+            teams.push(tm);
         }
         let attachments = self
             .attachments
@@ -338,6 +375,14 @@ impl Inventory {
             .collect();
         let mut slack_seen = self.slack_seen;
         slack_seen.retain(|_, c| match cmap.get(c) {
+            Some(&n) => {
+                *c = n;
+                true
+            }
+            None => false,
+        });
+        let mut teams_seen = self.teams_seen;
+        teams_seen.retain(|_, c| match cmap.get(c) {
             Some(&n) => {
                 *c = n;
                 true
@@ -361,6 +406,9 @@ impl Inventory {
             links_by_item,
             slack_seen,
             mail_seen,
+            teams,
+            teams_seen,
+            discord,
             ..self
         }
     }
@@ -422,6 +470,10 @@ impl Scanner<'_> {
             if !t.contains(product) {
                 t.insert(product.to_string());
             }
+        }
+        // A PST in an eDiscovery Teams folder: counted, not read yet.
+        if format == Format::Pst && ctx.path.contains("TeamsMessagesData") {
+            self.teams[ctx.collection as usize].pst_files += 1;
         }
         if let Some(fid) = crate::analyze::slack::attachment_file_id(&ctx.path) {
             self.attachments
@@ -909,6 +961,13 @@ impl Scanner<'_> {
                 match format {
                     Format::Json => tabular::json(&mut m, lim.max_json_document_bytes as usize),
                     Format::Jsonl => tabular::jsonl(&mut m),
+                    // A Discord package's messages are read row by row.
+                    Format::Csv
+                        if ctx.path.to_ascii_lowercase().ends_with("/messages.csv")
+                            && ctx.path.to_ascii_lowercase().contains("messages/c") =>
+                    {
+                        tabular::csv_rows(&mut m, lim.max_json_document_bytes as usize)
+                    }
                     Format::Csv => tabular::delimited(&mut m, b','),
                     Format::Tsv => tabular::delimited(&mut m, b'\t'),
                     Format::PlainText | Format::Markdown | Format::Html | Format::Xml => {
@@ -960,6 +1019,17 @@ impl Scanner<'_> {
             self.text[ctx.collection as usize]
                 .sources
                 .scan_text(&sample, ctx.collection);
+            // Mail headers are read separately (From/To/Cc only), so
+            // Message-IDs and server names don't look like people.
+            if matches!(format, Format::Mbox | Format::Eml) {
+                self.text[ctx.collection as usize]
+                    .fingerprint
+                    .add_text(&strip_mail_headers(&sample));
+            } else {
+                self.text[ctx.collection as usize]
+                    .fingerprint
+                    .add_text(&sample);
+            }
             let links = crate::analyze::sources::count_links(&sample);
             if !links.is_empty() {
                 self.links_by_item.insert(id, links);
@@ -998,12 +1068,33 @@ impl Scanner<'_> {
                     e.insert(links);
                 }
             }
+            self.text[ctx.collection as usize]
+                .fingerprint
+                .add_json(&doc);
+            self.teams[ctx.collection as usize].offer(
+                &ctx.path,
+                &doc,
+                ctx.collection,
+                &mut self.teams_seen,
+            );
+            self.discord[ctx.collection as usize].offer(
+                &ctx.path,
+                &doc,
+                ctx.collection,
+                &mut self.teams_seen,
+            );
             self.slack[ctx.collection as usize].offer(
                 &ctx.path,
                 &doc,
                 ctx.collection,
                 &mut self.slack_seen,
             );
+        }
+        if !outcome.addresses.is_empty() {
+            let f = &mut self.text[ctx.collection as usize].fingerprint;
+            for a in std::mem::take(&mut outcome.addresses) {
+                f.add_address(&a);
+            }
         }
         if !outcome.message_ids.is_empty() {
             let t = &mut self.text[ctx.collection as usize];

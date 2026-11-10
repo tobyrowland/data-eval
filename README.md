@@ -24,12 +24,14 @@ PDF and the encrypted private dossier come in later milestones (see below).
 Preview installers are on the
 [Releases page](https://github.com/tobyrowland/data-eval/releases):
 
-- Windows 10/11 (64-bit): `Working-Minds-Setup-windows-x64.exe` or `.msi`
+- Windows 10/11 (64-bit): `Working-Minds-Setup-windows-x64.exe`
+- Optional: `Working-Minds-Attachment-Downloader-Setup-windows-x64.exe`
 
-The preview is built for Windows x64 only for now; macOS and Linux builds are
-paused (see the matrix in `.github/workflows/release.yml`) and will return.
-The command-line tool is in `Working-Minds-CLI-windows-x64.zip`. The preview is
-not code-signed yet, so Windows shows a first-run warning.
+Only Windows x64 is built for now, and CI tests on Windows only. The macOS
+and Linux builds, the `.msi` and the command-line tool download are paused
+and will return once Windows is done (see `.github/workflows/`). The command-line
+tool still builds from source with `cargo build --release --bin working-minds`.
+The preview is not code-signed yet, so Windows shows a first-run warning.
 
 ## The desktop app
 
@@ -87,6 +89,56 @@ not code-signed yet, so Windows shows a first-run warning.
 
    An item counts as a duplicate only when everything in it, emails and
    other files alike, is also in another item.
+
+   **Data that doesn't seem to belong is flagged.** Each item is compared
+   with the rest of the map:
+   - people, email addresses, email and web domains, code-host owners and
+     Microsoft tenants it has in common with other items
+   - distinctive names in common: capitalised project, product and client
+     names and long acronyms; common words, months and tool names don't
+     count
+   - direct ties: shared messages or files, matched attachments, a
+     repository the other data links to
+   - whether its dates overlap the other items' dates
+
+   Public services such as gmail.com, github.com and teams.microsoft.com
+   never count as a connection. An item with nothing in common gets an amber
+   warning at the top of the platforms section and a "Not linked to your
+   other data" badge on its row, for example "Shares no people, email
+   addresses, domains or names with your other data, and its dates (2026)
+   don't overlap theirs". The warning offers *Show*, *Keep it* (remembered)
+   and *Remove*. The data-pack panel repeats it. Only counts of what is
+   shared reach the data map; the fingerprints are hashed and stay on the
+   computer.
+
+   **Microsoft Teams** exports get their own platform card:
+   - **read in full:** Microsoft Graph JSON (Teams Export API, eDiscovery
+     tools, tenant takeouts with `teams/<id>/messages_*.json` and
+     `users/<id>/messages_*.json`), and the personal "Export your data"
+     `messages.json`
+   - **counted:** messages, teams, channels, chats, people and meetings
+   - **counted once:** a chat stored in both participants' files, or in two
+     exports, counts once
+   - **PST files** from a Purview eDiscovery export are counted but not read
+     yet
+
+   **Discord** exports get their own card too:
+   - Discord's own **"Request your data" package**: `Account/user.json`,
+     `Messages/c<id>/channel.json` with `messages.json` (or `messages.csv`
+     in older packages), and `Servers/index.json`
+   - **DiscordChatExporter** channel exports (JSON) for whole servers
+   - counts messages (each once, even if a package is added twice),
+     servers, channels, DMs, group chats and linked attachments
+   - a personal package holds only the messages written by the account that
+     requested it, and the card says so
+
+   **Groups of unrelated items are flagged too.** Items are grouped by what
+   connects them, pair by pair, and the largest group is taken as the main
+   data. Two exports from another company that only connect to each other
+   (for example a Teams and a Discord export from the same team) are both
+   flagged "Only connected to …". A group is only flagged when it shows
+   whose data it is (people, addresses, domains or distinctive names), not
+   when it is merely thin.
 3. **Analysis:** collections, coverage, file formats and languages tables,
    plus activity over time.
 

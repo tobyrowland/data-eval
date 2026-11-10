@@ -51,6 +51,8 @@
   let attachTargets = new Map();
   function kindInfo(c) {
     if ((c.slack || []).length) return { badge: "#", color: "#6D5BD0", kind: "Slack workspace export" };
+    if (c.teams) return { badge: "T", color: "#5059C9", kind: "Microsoft Teams export" };
+    if (c.discord) return { badge: "D", color: "#5865F2", kind: c.discord.own_messages_only ? "Discord data package" : "Discord channel export" };
     if (attachTargets.has(c.label)) return { badge: "↓", color: "#22A094", kind: "Slack attachments", matched: attachTargets.get(c.label) };
     if ((c.display_label || "").startsWith("Google Takeout")) return { badge: "G", color: "#2F6FB0", kind: "Google Takeout" };
     if ((c.display_label || "").endsWith("(Git repository)")) return { badge: "‹›", color: "#5E6E84", kind: "Git repository" };
@@ -626,6 +628,7 @@
       added: Array.isArray(p.added) ? p.added : [],
       removed: Array.isArray(p.removed) ? p.removed : [],
       done: Array.isArray(p.done) ? p.done : [],
+      kept: Array.isArray(p.kept) ? p.kept : [],
     };
   }
   const catalogName = (map, id) => ((map.source_catalog || []).find((s) => s.id === id) || {}).name || id;
@@ -635,8 +638,8 @@
   // One card per platform with the items (files) collected for it, their
   // stats and overlaps, then the platforms the data points to that aren't
   // collected yet.
-  const PLATFORM_NAMES = { slack: "Slack", email: "Email", google_drive: "Google Drive", google_other: "Google (other products)", github: "GitHub", gitlab: "GitLab", bitbucket: "Bitbucket" };
-  const PLATFORM_ORDER = ["slack", "email", "google_drive", "google_other", "github", "gitlab", "bitbucket"];
+  const PLATFORM_NAMES = { slack: "Slack", teams: "Microsoft Teams", discord: "Discord", email: "Email", google_drive: "Google Drive", google_other: "Google (other products)", github: "GitHub", gitlab: "GitLab", bitbucket: "Bitbucket" };
+  const PLATFORM_ORDER = ["slack", "teams", "discord", "email", "google_drive", "google_other", "github", "gitlab", "bitbucket"];
   // Item rows whose file tree is open, kept across redraws.
   const openTrees = new Set();
 
@@ -681,6 +684,13 @@
 
     // ---- item table (the files in a collection)
     function overlapBadge(c) {
+      const l = c.linkage || {};
+      const link = l.status === "unlinked" ? `<span class="ov unlinked" title="${esc(l.explanation)}">Not linked to your other data</span>`
+        : l.status === "weak" ? `<span class="ov weak" title="${esc(l.explanation)}">Weak link</span>` : "";
+      const ov = overlapOnly(c);
+      return link && ov.includes('class="ov uniq"') ? link : link + ov;
+    }
+    function overlapOnly(c) {
       if (c.obsolete_given) return `<span class="ov dup" title="Everything in it is also in ${esc(nameOf(c.obsolete_given))}">Duplicate of ${esc(trunc(nameOf(c.obsolete_given), 34))}</span>`;
       const ovs = c.overlaps || [];
       const noun = (c.slack || []).length ? "messages" : "emails";
@@ -696,6 +706,8 @@
     function recordsOf(c) {
       const s = sumSlack(c);
       if ((c.slack || []).length) return `${num(s.message_records)} messages`;
+      if (c.discord) return `${num(c.discord.messages)} messages`;
+      if (c.teams) return `${num(c.teams.messages)} messages${c.teams.meetings ? ` · ${num(c.teams.meetings)} meetings` : ""}`;
       const mail = (c.formats || []).filter((f) => f.category === "Email").length;
       if (!c.structured_records) return "—";
       return `${num(c.structured_records)} ${mail && (c.formats || []).length === mail ? "emails" : "records"}`;
@@ -743,10 +755,29 @@
       const lasts = list.map((c) => c.date_coverage && c.date_coverage.last).filter(Boolean).sort();
       const dups = list.filter((c) => c.obsolete_given).length;
       const facts = [`${num(list.length)} ${list.length === 1 ? "item" : "items"}`, `${num(files)} files`, bytes(size)];
-      if (firsts.length) facts.push(`${firsts[0]} → ${lasts[lasts.length - 1]}`);
-      if (p === "slack") { const m = Object.values(map.activity || {}).reduce((a, b) => a + b, 0); if (m) facts.push(`${num(m)} messages, each counted once`); }
       const notes = [];
       let partial = false;
+      if (firsts.length) facts.push(`${firsts[0]} → ${lasts[lasts.length - 1]}`);
+      if (p === "slack") { const m = list.reduce((a, c) => a + (c.slack || []).reduce((x, s) => x + s.message_records - (s.records_also_in_other_exports || 0), 0), 0); if (m) facts.push(`${num(m)} messages, each counted once`); }
+      if (p === "discord") {
+        const d = list.filter((c) => c.discord).map((c) => c.discord);
+        const m = d.reduce((a, x) => a + x.messages - x.messages_also_in_other_items, 0);
+        const servers = d.reduce((a, x) => a + x.servers, 0);
+        const chats = d.reduce((a, x) => a + x.channels + x.direct_messages + x.group_messages, 0);
+        const att = d.reduce((a, x) => a + x.attachments_referenced, 0);
+        if (m) facts.push(`${num(m)} messages, each counted once`, `${num(servers)} ${servers === 1 ? "server" : "servers"}`, `${num(chats)} channels and DMs`);
+        if (att) facts.push(`${num(att)} attachments linked, not included`);
+        if (d.some((x) => x.own_messages_only)) {
+          partial = true;
+          notes.push(`<div class="pc-note warn"><span><b>Only one person's messages.</b> A Discord data package holds only the messages written by the account that requested it; other people's replies aren't in it. For whole servers, an admin can export channels with a tool such as DiscordChatExporter.</span><span class="pc-note-act">${act("How to export", () => handlers.onGuide("export:discord"))}</span></div>`);
+        }
+      }
+      if (p === "teams") {
+        const m = list.reduce((a, c) => a + (c.teams ? c.teams.messages - c.teams.messages_also_in_other_items : 0), 0);
+        const ch = list.reduce((a, c) => a + (c.teams ? c.teams.channels + c.teams.chats : 0), 0);
+        if (m) facts.push(`${num(m)} messages, each counted once`, `${num(ch)} channels and chats`);
+        if (list.some((c) => c.teams && !c.teams.messages)) notes.push(`<div class="pc-note warn"><span>An eDiscovery export in Outlook PST files is counted but can't be read yet. Ask your admin for the HTML or JSON export instead.</span><span class="pc-note-act">${act("How to export", () => handlers.onGuide("export:teams"))}</span></div>`);
+      }
       if (p === "slack" && map.slack_files) {
         const sf = map.slack_files, totalF = sf.images + sf.documents, got = sf.images_found + sf.documents_found;
         if (totalF && got < totalF) {
@@ -790,7 +821,15 @@
 
     const removedSources = plan.removed.map((id) => sources.find((s) => s.id === id)).filter((s) => s && !s.in_selection);
     const other = (map.preparation_priorities || []).filter((p) => !/^(Add the original attachments|If you hold the repositories)/.test(p));
+    const kept = new Set(plan.kept || []);
+    const unlinked = cols.filter((c) => c.linkage && c.linkage.status === "unlinked" && !kept.has(c.label));
+    const warnings = unlinked.map((c) => `<div class="link-warn" data-label="${esc(c.label)}">
+        <div class="lw-icon" aria-hidden="true">!</div>
+        <div class="lw-text"><b>${esc(c.display_label || c.label)} doesn't seem connected to your other data</b><span>${esc(c.linkage.explanation)} If it isn't yours, remove it so it doesn't inflate your totals or end up in the data pack.</span></div>
+        <div class="lw-act"><button class="btn ghost small" data-lw-show>Show</button><button class="btn ghost small" data-lw-keep>Keep it</button>${F ? `<button class="btn danger-solid small" data-lw-remove>Remove</button>` : ""}</div>
+      </div>`).join("");
     host.innerHTML = `
+      ${warnings}
       ${total ? `<div class="steps-progress card ${doneCount < total ? "" : "all"}">
         <div class="sp-text"><strong>${num(collected.length)} of ${num(total)} platforms collected</strong><span>${todos.length - doneTodos ? `${num(todos.length - doneTodos)} more your data points to` : "Everything your data points to is accounted for"}</span></div>
         <div class="sp-bar"><span style="width:${pctDone}%"></span></div>
@@ -803,6 +842,16 @@
       ${(extra.removedItems || []).length ? `<div class="removed-line">Taken out of this assessment: ${extra.removedItems.map((r) => `<button class="link-btn" data-restore-item="${esc(r.path)}" title="Put back">${esc(r.name)} ↺</button>`).join(" ")}</div>` : ""}`;
 
     host.querySelectorAll("[data-act-i]").forEach((b) => (b.onclick = () => actions[+b.dataset.actI]()));
+    host.querySelectorAll(".link-warn").forEach((w) => {
+      const label = w.dataset.label;
+      w.querySelector("[data-lw-show]").onclick = () => {
+        const row = [...host.querySelectorAll(".it-row")].find((r) => r.dataset.label === label);
+        if (row) { row.scrollIntoView({ behavior: "smooth", block: "center" }); row.classList.add("flash"); setTimeout(() => row.classList.remove("flash"), 1600); }
+      };
+      w.querySelector("[data-lw-keep]").onclick = () => { if (!plan.kept.includes(label)) plan.kept.push(label); save(); };
+      const rm = w.querySelector("[data-lw-remove]");
+      if (rm && F) confirmClick(rm, "Confirm remove", () => F.removeItem(label, nameOf(label)));
+    });
     host.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = () => { plan.removed = plan.removed.filter((id) => id !== b.dataset.restore); save(); }));
     host.querySelectorAll("[data-tree]").forEach((b) => (b.onclick = () => {
       const k = b.closest("tr").dataset.key;
