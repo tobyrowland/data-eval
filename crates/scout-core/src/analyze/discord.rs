@@ -42,6 +42,8 @@ pub struct DiscordRecogniser {
     keys: HashSet<(String, String)>,
     channels: BTreeMap<String, Channel>,
     servers: BTreeSet<String>,
+    /// Server names ("PixPaint"). Local only.
+    pub server_names: BTreeSet<String>,
     people: HashSet<String>,
     attachments: u64,
     package: bool,
@@ -91,6 +93,13 @@ impl DiscordRecogniser {
                         .and_then(Value::as_str)
                     {
                         ch.guild = Some(g.to_string());
+                        if let Some(n) = doc
+                            .get("guild")
+                            .and_then(|g| g.get("name"))
+                            .and_then(Value::as_str)
+                        {
+                            self.server_names.insert(n.to_string());
+                        }
                         self.servers.insert(g.to_string());
                     }
                     ch.recipients = doc
@@ -128,6 +137,8 @@ impl DiscordRecogniser {
         if file == "index.json" && path.to_ascii_lowercase().contains("servers/") {
             if let Some(o) = doc.as_object() {
                 self.servers.extend(o.keys().cloned());
+                self.server_names
+                    .extend(o.values().filter_map(|v| v.as_str().map(String::from)));
             }
             return;
         }

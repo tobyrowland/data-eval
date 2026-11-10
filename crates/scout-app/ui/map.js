@@ -21,11 +21,6 @@
     "Documents": "#187C75", "Tables": "#2F6FB0", "Structured data": "#6D5BD0", "Email": "#C2577A",
     "Media": "#D9921F", "Archives": "#7B8AA0", "Other": "#AEB8C6",
   };
-  const SLACK_PARTS = [
-    ["participant_message_records", "People's messages", "#187C75"],
-    ["bot_integration_message_records", "Bots & integrations", "#6D5BD0"],
-    ["administrative_records", "Membership & admin", "#AEB8C6"],
-  ];
   const STATUS = [
     ["assessed", "Assessed", "#187C75"],
     ["partly_assessed", "Partly assessed", "#E8B04B"],
@@ -52,6 +47,7 @@
   function kindInfo(c) {
     if ((c.slack || []).length) return { badge: "#", color: "#6D5BD0", kind: "Slack workspace export" };
     if (c.teams) return { badge: "T", color: "#5059C9", kind: "Microsoft Teams export" };
+    if ((c.platforms || []).includes("teams")) return { badge: "↓", color: "#5059C9", kind: "Teams linked files" };
     if (c.discord) return { badge: "D", color: "#5865F2", kind: c.discord.own_messages_only ? "Discord data package" : "Discord channel export" };
     if (attachTargets.has(c.label)) return { badge: "↓", color: "#22A094", kind: "Slack attachments", matched: attachTargets.get(c.label) };
     if ((c.display_label || "").startsWith("Google Takeout")) return { badge: "G", color: "#2F6FB0", kind: "Google Takeout" };
@@ -65,281 +61,113 @@
     return { badge: "▤", color: "#187C75", kind: "Files and documents" };
   }
 
-  // ---------------------------------------------------------------- packing
-  /** Spiral packing: biggest first, each circle at the nearest free spot. */
-  function pack(items, pad) {
-    const placed = [];
-    const sorted = items.slice().sort((a, b) => b.r - a.r);
-    for (const it of sorted) {
-      if (!placed.length) { it.x = 0; it.y = 0; placed.push(it); continue; }
-      let ok = false;
-      for (let t = 0; t < 4000 && !ok; t++) {
-        const a = t * 0.35, d = 1.2 * t * 0.35;
-        const x = Math.cos(a) * d, y = Math.sin(a) * d;
-        if (placed.every((p) => Math.hypot(p.x - x, p.y - y) >= p.r + it.r + pad)) { it.x = x; it.y = y; ok = true; }
-      }
-      if (!ok) { it.x = 0; it.y = 0; }
-      placed.push(it);
-    }
-    // centre on the enclosing circle's approximate centre
-    const cx = placed.reduce((s, p) => s + p.x * p.r * p.r, 0) / placed.reduce((s, p) => s + p.r * p.r, 0);
-    const cy = placed.reduce((s, p) => s + p.y * p.r * p.r, 0) / placed.reduce((s, p) => s + p.r * p.r, 0);
-    placed.forEach((p) => { p.x -= cx; p.y -= cy; });
-    const R = Math.max(...placed.map((p) => Math.hypot(p.x, p.y) + p.r));
-    return { items: placed, R };
+  // ---------------------------------------------------------------- map
+  // One bubble per platform around the company, sized by unique content.
+  const PLATFORM_COLOR = { slack: "#6D5BD0", teams: "#5059C9", discord: "#5865F2", email: "#C4577A", google_drive: "#2F6FB0", google_other: "#4F86C6", github: "#5E6E84", gitlab: "#7A5E84", bitbucket: "#3D6E9E", other: "#8A97A8" };
+
+  /** Collected platforms with their items, plus items tied to none. */
+  function platformGroups(map) {
+    const byPlat = new Map();
+    const cols = map.collections || [];
+    cols.forEach((c) => (c.platforms || []).forEach((p) => { if (!byPlat.has(p)) byPlat.set(p, []); byPlat.get(p).push(c); }));
+    const rank = (p) => { const i = PLATFORM_ORDER.indexOf(p); return i < 0 ? 99 : i; };
+    const collected = [...byPlat.keys()].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    const loose = cols.filter((c) => !(c.platforms || []).length);
+    return { byPlat, collected, loose };
   }
 
-  // ---------------------------------------------------------------- layout
-  function layout(map) {
-    const cols = map.collections.map((c, i) => {
-      const s = sumSlack(c);
-      const score = Math.max(c.logical_files, (c.structured_records || 0) / 25, s.message_records || 0);
-      return { c, i, s, score, info: kindInfo(c) };
-    });
-    const maxScore = Math.max(1, ...cols.map((n) => n.score));
-    cols.forEach((n) => { n.r = 58 + 64 * Math.sqrt(n.score / maxScore); n.type = "col"; });
-
-    // inner bubbles
-    cols.forEach((n) => {
-      let parts;
-      if ((n.c.slack || []).length) {
-        parts = SLACK_PARTS.map(([k, label, color]) => ({ label, color, value: n.s[k] || 0, unit: "messages", examined: true }))
-          .filter((p) => p.value > 0);
-      } else {
-        parts = (n.c.formats || []).map((f) => ({
-          label: f.format, color: CAT[f.category] || CAT.Other, value: f.files, unit: f.files === 1 ? "file" : "files",
-          examined: f.examined > 0, bytes: f.bytes, category: f.category, examinedCount: f.examined,
-        }));
-        if (n.c.logical_files === 1 && parts.length === 1 && n.c.structured_records > 0) {
-          // A single file is more meaningfully shown by what is inside it.
-          const isMail = parts[0].category === "Email";
-          parts[0].note = "1 file · " + parts[0].label;
-          parts[0].value = n.c.structured_records;
-          parts[0].unit = isMail ? "emails" : "records";
-          parts[0].label = isMail ? "emails" : "records";
-        }
-      }
-      const maxV = Math.max(1, ...parts.map((p) => p.value));
-      parts.forEach((p) => { p.r = 6 + 40 * Math.sqrt(p.value / maxV); });
-      const packed = pack(parts, 3);
-      const scale = packed.R > 0 ? (n.r * 0.8) / packed.R : 1;
-      packed.items.forEach((p) => { p.x *= scale; p.y *= scale; p.r *= scale; });
-      n.parts = packed.items;
-    });
-
-    // hub + collections on an ellipse
-    const nodes = [];
-    const hub = { type: "hub", x: 0, y: 0, r: cols.length > 1 ? 42 : 0, fixed: true };
-    if (cols.length > 1) nodes.push(hub);
-    const n = cols.length;
-    const maxR = Math.max(...cols.map((c) => c.r));
-    const ring = n === 1 ? 0 : Math.max(hub.r + maxR + 70, (2 * maxR + 60) / (2 * Math.sin(Math.PI / n)));
-    cols.forEach((c, i) => {
-      // Wide layout for a wide frame: an ellipse, and for 4+ collections
-      // rotated so none sits straight above the hub (satellites would stack up).
-      const start = n === 2 ? 0 : n >= 4 ? -Math.PI / 2 + Math.PI / n : -Math.PI / 2;
-      const a = start + (i * 2 * Math.PI) / Math.max(1, n);
-      c.angle = a;
-      c.x = Math.cos(a) * ring * 2.0;
-      c.y = Math.sin(a) * ring * 0.72;
-      nodes.push(c);
-    });
-
-    // satellites for referenced-but-missing material
-    const rels = map.relationships || [];
-    const maxCount = Math.max(1, ...rels.map((r) => r.count));
-    const ghosts = [];
-    cols.forEach((c) => {
-      const mine = rels.filter((r) => r.from === c.c.label);
-      // Point satellites outward, leaning sideways so the map stays wide.
-      const base = n === 1 ? 0 : Math.atan2(c.y * 0.55, c.x);
-      mine.forEach((r, j) => {
-        const spread = mine.length > 1 ? (j - (mine.length - 1) / 2) * 0.72 : 0;
-        const a = base + spread;
-        const gr = 22 + 22 * Math.sqrt(r.count / maxCount);
-        const d = c.r + 72 + gr;
-        const g = { type: "ghost", rel: r, parent: c, r: gr, x: c.x + Math.cos(a) * d, y: c.y + Math.sin(a) * d, rest: d };
-        ghosts.push(g);
-        nodes.push(g);
-      });
-    });
-
-    // relax: separate overlapping nodes, keep satellites near their parent
-    const gap = 30;
-    for (let it = 0; it < 260; it++) {
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          const a = nodes[i], b = nodes[j];
-          const need = a.r + b.r + gap + (a.type === "col" && b.type === "col" ? 40 : 0);
-          let dx = b.x - a.x, dy = b.y - a.y;
-          let d = Math.hypot(dx, dy) || 0.01;
-          if (d < need) {
-            const push = (need - d) / 2;
-            dx /= d; dy /= d;
-            const wa = a.fixed ? 0 : a.type === "col" ? 0.6 : 1;
-            const wb = b.fixed ? 0 : b.type === "col" ? 0.6 : 1;
-            const tot = wa + wb || 1;
-            a.x -= dx * push * (2 * wa / tot); a.y -= dy * push * (2 * wa / tot);
-            b.x += dx * push * (2 * wb / tot); b.y += dy * push * (2 * wb / tot);
-          }
-        }
-      }
-      for (const g of ghosts) {
-        const p = g.parent;
-        const dx = g.x - p.x, dy = g.y - p.y, d = Math.hypot(dx, dy) || 1;
-        const k = 0.08 * (d - g.rest) / d;
-        g.x -= dx * k; g.y -= dy * k;
-      }
+  /** The platform's unique content: messages, emails or files. */
+  function platformContent(p, list) {
+    const sum = (f) => list.reduce((a, c) => a + (f(c) || 0), 0);
+    if (p === "slack") return { value: sum((c) => (c.slack || []).reduce((x, s) => x + s.message_records - (s.records_also_in_other_exports || 0), 0)), unit: "messages" };
+    if (p === "teams") { const v = sum((c) => c.teams && c.teams.messages - c.teams.messages_also_in_other_items); if (v) return { value: v, unit: "messages" }; }
+    if (p === "discord") return { value: sum((c) => c.discord && c.discord.messages - c.discord.messages_also_in_other_items), unit: "messages" };
+    if (p === "email") {
+      // Emails in two mailboxes count once: each shared email is listed on
+      // both items' overlaps, so half the shared total is the double count.
+      const labels = new Set(list.map((c) => c.label));
+      const shared = sum((c) => (c.overlaps || []).filter((o) => labels.has(o.with)).reduce((x, o) => x + o.shared_messages, 0));
+      const v = sum((c) => c.structured_records) - Math.round(shared / 2);
+      if (v > 0) return { value: v, unit: "emails" };
     }
-
-    // bounds, including labels below collections and satellites
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const nd of nodes) {
-      const below = nd.type === "col" ? 52 : nd.type === "ghost" ? 48 : 0;
-      const side = nd.type === "ghost" ? 60 : nd.type === "col" ? 30 : 0;
-      x0 = Math.min(x0, nd.x - nd.r - side); x1 = Math.max(x1, nd.x + nd.r + side);
-      y0 = Math.min(y0, nd.y - nd.r - (nd.type === "ghost" ? 48 : 8)); y1 = Math.max(y1, nd.y + nd.r + below);
-    }
-    const padX = 24, padY = 16;
-    return { hub, cols, ghosts, box: [x0 - padX, y0 - padY, x1 - x0 + 2 * padX, y1 - y0 + 2 * padY] };
+    return { value: sum((c) => c.logical_files), unit: "files" };
   }
 
-  function edgePath(a, b, bend) {
-    const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
-    const ux = dx / d, uy = dy / d;
-    const sx = a.x + ux * a.r, sy = a.y + uy * a.r;
-    const ex = b.x - ux * b.r, ey = b.y - uy * b.r;
-    const mx = (sx + ex) / 2 - uy * bend, my = (sy + ey) / 2 + ux * bend;
-    return { d: `M${sx.toFixed(1)},${sy.toFixed(1)} Q${mx.toFixed(1)},${my.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`, mx, my };
-  }
-
-  // ---------------------------------------------------------------- map SVG
-  function mapSvg(map) {
-    const L = layout(map);
-    const [bx, by, bw, bh] = L.box;
+  function mapSvg(map, plan, company) {
+    const { byPlat, collected, loose } = platformGroups(map);
+    const W = 1000, H = 470, cx = W / 2, cy = 210;
     const tips = [];
     const tip = (html) => { tips.push(html); return `data-tip="${tips.length - 1}"`; };
-    // Never draw larger than 1.25x natural size, so a map with one or two
-    // collections stays legible instead of filling the card with giant type.
-    let s = `<svg class="map-svg" style="max-width:${Math.round(bw * 1.4)}px;margin:0 auto" viewBox="${bx.toFixed(0)} ${by.toFixed(0)} ${bw.toFixed(0)} ${bh.toFixed(0)}" role="img" aria-label="Map of your data collections">
-      <defs>
-        <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-          <rect width="6" height="6" fill="#fff"/><rect width="2.2" height="6" fill="#CAD4E0"/>
-        </pattern>
-        <radialGradient id="hubg" cx="35%" cy="30%"><stop offset="0" stop-color="#2C4F73"/><stop offset="1" stop-color="#14283F"/></radialGradient>
-        <filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="6" stdDeviation="9" flood-color="#14283F" flood-opacity=".12"/></filter>
-      </defs>`;
-
-    // hub spokes
-    if (L.hub.r) {
-      L.cols.forEach((c, i) => {
-        // stop short of the caption when a collection sits straight above the hub
-        const clear = c.y < 0 && Math.abs(c.x) < c.r ? 48 : 0;
-        const e = edgePath(L.hub, { x: c.x, y: c.y, r: c.r + clear }, 0);
-        s += `<path d="${e.d}" stroke="#C9D5E2" stroke-width="2" fill="none" class="draw" style="animation-delay:${200 + i * 120}ms"/>`;
-      });
-    }
-    // satellite links
-    L.ghosts.forEach((g, i) => {
-      const e = edgePath(g.parent, g, 18);
-      const delay = 1100 + i * 140;
-      const done = g.rel.resolved >= g.rel.count;
-      s += `<path d="${e.d}" stroke="${done ? "#22A094" : "#E2A23B"}" stroke-width="2" fill="none" class="${done ? "" : "flow "}fade" style="animation-delay:${delay}ms, ${delay}ms"/>`;
-      // where the originals were found: a solid teal link to that collection
-      (g.rel.found_in || []).forEach((label) => {
-        const target = L.cols.find((c) => c.c.label === label);
-        if (!target) return;
-        const f = edgePath(g, target, -26);
-        s += `<path d="${f.d}" stroke="#22A094" stroke-width="2.5" fill="none" class="draw" style="animation-delay:${delay + 300}ms"/>`;
-      });
+    const nodes = collected.map((p) => ({ p, list: byPlat.get(p) }));
+    if (loose.length) nodes.push({ p: "other", list: loose });
+    nodes.forEach((n) => Object.assign(n, platformContent(n.p, n.list)));
+    const maxV = Math.max(1, ...nodes.map((n) => n.value));
+    nodes.forEach((n) => { n.r = 48 + 32 * Math.sqrt(n.value / maxV); });
+    const k = nodes.length;
+    nodes.forEach((n, i) => {
+      const a = k === 1 ? 0 : -Math.PI / 2 + (i * 2 * Math.PI) / k + (k % 2 ? 0 : Math.PI / k);
+      n.x = cx + (k === 1 ? 300 : 330 * Math.cos(a));
+      n.y = cy + (k === 1 ? 0 : 150 * Math.sin(a));
     });
-
-    // collections
-    L.cols.forEach((n, i) => {
-      const delay = 150 + i * 140;
-      const c = n.c;
-      const examined = (c.by_status.assessed || 0) + (c.by_status.partly_assessed || 0);
-      const denom = Math.max(1, c.logical_files - (c.by_status.excluded || 0));
-      const pct = Math.round((examined * 100) / denom);
-      s += `<g transform="translate(${n.x.toFixed(1)},${n.y.toFixed(1)})"><g class="node-collection grow" style="animation-delay:${delay}ms">
-        <circle class="halo" r="${(n.r + 9).toFixed(1)}" fill="none" stroke="${n.info.color}" stroke-opacity=".25" stroke-width="8"/>
-        <circle r="${n.r.toFixed(1)}" fill="#F7FAFC" stroke="${n.info.color}" stroke-width="2" filter="url(#soft)"/>
-        <circle r="${(n.r - 6).toFixed(1)}" fill="none" stroke="${n.info.color}" stroke-opacity=".14" stroke-width="1" stroke-dasharray="2 4"/>`;
-      n.parts.forEach((p, j) => {
-        const fill = p.examined ? p.color : "url(#hatch)";
-        const t = tip(`<b>${esc(p.label)}</b>${num(p.value)} ${esc(p.unit)}${p.bytes ? " · " + bytes(p.bytes) : ""}${p.note ? "<br>" + esc(p.note) : ""}<br><span>${p.examined ? "Contents examined" : "Counted only: needs a parser that is not in this release"}</span>`);
-        s += `<g class="bubble grow" style="animation-delay:${delay + 260 + j * 45}ms" ${t}>
-          <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${Math.max(2, p.r).toFixed(1)}" fill="${fill}" stroke="${p.color}" stroke-width="${p.examined ? 0 : 1.5}" fill-opacity="${p.examined ? 0.92 : 1}"/>`;
-        if (p.r > 21) {
-          const fs = clamp(p.r / 3.6, 9, 13);
-          const ink = p.examined ? "#fff" : "#3E5370";
-          s += `<text x="${p.x.toFixed(1)}" y="${(p.y - fs * 0.2).toFixed(1)}" text-anchor="middle" font-size="${(fs * 1.15).toFixed(1)}" font-weight="700" fill="${ink}" pointer-events="none">${num(p.value)}</text>
-                <text x="${p.x.toFixed(1)}" y="${(p.y + fs * 1.05).toFixed(1)}" text-anchor="middle" font-size="${(fs * 0.82).toFixed(1)}" fill="${ink}" fill-opacity=".9" pointer-events="none">${esc(trunc(p.label, Math.floor(p.r / 2.9)))}</text>`;
-        }
-        s += `</g>`;
-      });
-      s += `<text class="halo-text" y="${(n.r + 22).toFixed(1)}" text-anchor="middle" font-size="14.5" font-weight="650" fill="#14283F">${esc(trunc(c.display_label || c.label, 34))}</text>
-        <text class="halo-text" y="${(n.r + 40).toFixed(1)}" text-anchor="middle" font-size="12" fill="#6B7C93">${esc(n.info.kind)} · ${num(c.logical_files)} ${c.logical_files === 1 ? "file" : "files"} · ${n.info.matched != null ? `${num(n.info.matched)} matched to conversations` : `${pct}% examined`}</text>
-      </g></g>`;
-    });
-
-    // satellites
-    L.ghosts.forEach((g, i) => {
-      const delay = 1200 + i * 140;
-      const r = g.rel;
-      const missing = Math.max(0, r.count - (r.resolved || 0));
-      const frac = r.count ? (r.resolved || 0) / r.count : 0;
-      const done = missing === 0;
-      const t = tip(`<b>${esc(r.to)}</b>${esc(r.explanation)}<br><span>${done ? "All found in your selection." : "See “Make your data more complete” below for how to get these."}</span>`);
-      const lines = wrap(r.to, 18);
-      const fs = clamp(g.r / 2.3, 11, 17);
-      const circ = 2 * Math.PI * g.r;
-      s += `<g transform="translate(${g.x.toFixed(1)},${g.y.toFixed(1)})"><g class="grow" style="animation-delay:${delay}ms" ${t}>`;
-      if (done) {
-        s += `<circle r="${g.r.toFixed(1)}" fill="#E3F3F1" stroke="#22A094" stroke-width="2.5"/>
-          <path d="M${-fs * 0.45},${-fs * 0.35} l${fs * 0.3},${fs * 0.3} l${fs * 0.6},${-fs * 0.6}" stroke="#187C75" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-          <text y="${(fs * 0.95).toFixed(1)}" text-anchor="middle" font-size="10.5" font-weight="650" fill="#187C75">${num(r.count)} added</text>`;
-      } else {
-        s += `<circle r="${g.r.toFixed(1)}" fill="#FDF6EA" stroke="#E2A23B" stroke-width="2" stroke-dasharray="5 4"/>`;
-        if (frac > 0) {
-          s += `<circle r="${g.r.toFixed(1)}" fill="none" stroke="#22A094" stroke-width="4" stroke-linecap="round" transform="rotate(-90)"
-            stroke-dasharray="${(circ * frac).toFixed(1)} ${circ.toFixed(1)}"/>`;
-        }
-        s += `<text y="-2" text-anchor="middle" font-size="${fs.toFixed(1)}" font-weight="700" fill="#8A5A0B">${num(missing)}</text>
-          <text y="${(fs * 0.85).toFixed(1)}" text-anchor="middle" font-size="10" fill="#A56E14">${frac > 0 ? "still missing" : "missing"}</text>`;
+    const kept = new Set(plan.kept || []);
+    const name = company ? company.name : "Your data";
+    const total = map.totals.unique_records != null ? map.totals.unique_records : map.totals.structured_records;
+    let s = `<svg viewBox="0 0 ${W} ${H}" class="pmap" role="img" aria-label="Your data by platform">`;
+    nodes.forEach((n) => { s += `<line x1="${cx}" y1="${cy}" x2="${n.x}" y2="${n.y}" class="pm-spoke"/>`; });
+    // the company in the middle
+    s += `<g class="pm-hub"><circle cx="${cx}" cy="${cy}" r="74"/>
+      <text x="${cx}" y="${cy - 6}" class="pm-hub-name">${esc(trunc(name, 18))}</text>
+      <text x="${cx}" y="${cy + 18}" class="pm-hub-sub">${num(total)} records</text></g>`;
+    nodes.forEach((n) => {
+      const color = PLATFORM_COLOR[n.p] || PLATFORM_COLOR.other;
+      const label = n.p === "other" ? "Other files" : PLATFORM_NAMES[n.p] || catalogName(map, n.p);
+      const suspect = n.list.some((c) => c.linkage && c.linkage.status === "unlinked" && !kept.has(c.label));
+      let badge = "";
+      if (suspect) badge = "Check this data";
+      else if (n.p === "slack" && map.slack_files) {
+        const sf = map.slack_files, miss = sf.images + sf.documents - sf.images_found - sf.documents_found;
+        if (miss > 0 && !(plan.done || []).includes("slack-files")) badge = `${num(miss)} files missing`;
+      } else if (n.p === "teams" && map.teams_files) {
+        const miss = map.teams_files.referenced - map.teams_files.found;
+        if (miss > 0 && !(plan.done || []).includes("teams-files")) badge = `${num(miss)} linked files missing`;
       }
-      // put the caption on the side away from the parent, clear of the link
-      const above = g.y < g.parent.y - g.parent.r * 0.3;
-      lines.forEach((ln, k) => {
-        const y = above ? -g.r - 10 - (lines.length - 1 - k) * 14 : g.r + 16 + k * 14;
-        s += `<text class="halo-text" y="${y.toFixed(1)}" text-anchor="middle" font-size="12" fill="#6E4A0E">${esc(ln)}</text>`;
-      });
-      s += `</g></g>`;
-    });
-
-    // hub
-    if (L.hub.r) {
-      const total = map.totals.logical_files;
-      s += `<g class="grow" style="animation-delay:40ms">
-        <circle r="${L.hub.r}" fill="url(#hubg)" filter="url(#soft)"/>
-        <circle r="${L.hub.r + 6}" fill="none" stroke="#14283F" stroke-opacity=".12" stroke-width="1.5" stroke-dasharray="3 4"/>
-        <text y="-4" text-anchor="middle" font-size="11" fill="#9FB4CA" font-weight="600" letter-spacing=".06em">YOUR DATA</text>
-        <text y="14" text-anchor="middle" font-size="15" fill="#fff" font-weight="700">${num(total)}</text>
+      const files = n.list.reduce((a, c) => a + c.logical_files, 0);
+      const firsts = n.list.map((c) => c.date_coverage && c.date_coverage.first).filter(Boolean).sort();
+      const lasts = n.list.map((c) => c.date_coverage && c.date_coverage.last).filter(Boolean).sort();
+      const t = tip(`<b>${esc(label)}</b>${num(n.value)} ${n.unit}<br>${num(n.list.length)} ${n.list.length === 1 ? "item" : "items"} · ${num(files)} files · ${bytes(n.list.reduce((a, c) => a + c.expanded_bytes, 0))}${firsts.length ? `<br>${esc(firsts[0])} → ${esc(lasts[lasts.length - 1])}` : ""}${suspect ? "<br><i>An item here doesn't seem connected to your other data</i>" : ""}`);
+      s += `<g class="pm-node ${suspect ? "suspect" : ""}" data-plat="${esc(n.p)}" ${t} tabindex="0" role="button" aria-label="${esc(label)}: ${num(n.value)} ${n.unit}">
+        <circle cx="${n.x}" cy="${n.y}" r="${n.r}" style="--c:${color}"/>
+        <text x="${n.x}" y="${n.y - 10}" class="pm-name">${esc(trunc(label, 16))}</text>
+        <text x="${n.x}" y="${n.y + 12}" class="pm-value">${num(n.value)}</text>
+        <text x="${n.x}" y="${n.y + 28}" class="pm-unit">${esc(n.unit)}</text>
+        ${badge ? `<g class="pm-badge ${suspect ? "check" : ""}"><rect x="${n.x - 64}" y="${n.y + n.r - 4}" width="128" height="22" rx="11"/><text x="${n.x}" y="${n.y + n.r + 11}">${esc(badge)}</text></g>` : ""}
       </g>`;
+    });
+    // platforms the data points to but that aren't collected
+    const removed = new Set(plan.removed || []);
+    const todo = (map.sources || [])
+      .filter((x) => !byPlat.has(x.id) && !x.in_selection && !removed.has(x.id) && (x.links || x.app_installed || x.bot_messages))
+      .sort((a, b) => (b.links || 0) - (a.links || 0));
+    if (todo.length) {
+      const shown = todo.slice(0, 6);
+      const more = todo.length - shown.length;
+      const items = shown.map((x) => x.name).concat(more > 0 ? [`+${more} more`] : []);
+      const widths = items.map((t) => 22 + t.length * 7.2);
+      const gap = 10, totalW = widths.reduce((a, b) => a + b, 0) + gap * (items.length - 1);
+      let x = cx - totalW / 2;
+      s += `<text x="${cx}" y="${H - 44}" class="pm-todo-title">Not collected yet</text>`;
+      items.forEach((label, i) => {
+        const src = shown[i];
+        const t = src ? tip(`<b>${esc(src.name)}</b>${esc(src.evidence)}`) : "";
+        s += `<g class="pm-todo" ${t} ${src ? `data-todo="${esc(src.id)}"` : ""}><rect x="${x}" y="${H - 34}" width="${widths[i]}" height="26" rx="13"/><text x="${x + widths[i] / 2}" y="${H - 16}">${esc(label)}</text></g>`;
+        x += widths[i] + gap;
+      });
     }
     s += `</svg>`;
     return { svg: s, tips };
   }
 
-  function wrap(text, width) {
-    const words = String(text).split(/\s+/), out = [];
-    let cur = "";
-    for (const w of words) {
-      if ((cur + " " + w).trim().length > width && cur) { out.push(cur); cur = w; } else cur = (cur + " " + w).trim();
-    }
-    if (cur) out.push(cur);
-    return out.slice(0, 3);
-  }
+
 
   // ---------------------------------------------------------------- timeline
   function timelineSvg(activity) {
@@ -395,27 +223,29 @@
     const t = map.totals, cov = map.coverage;
     const pct = cov.content_examined_percent ?? 0;
     const sp = span(map);
-    const M = mapSvg(map);
+    const plan = normalisePlan(extra.plan);
+    // The company: the owner's own name if they set one, else the detected one.
+    const company = plan.company ? { name: plan.company, confidence: "set", evidence: [] } : map.company || null;
+    const M = mapSvg(map, plan, company);
     const T = timelineSvg(map.activity);
     const lead = map.summary[0] || "";
     const totalCov = Object.values(cov.by_status).reduce((a, b) => a + b, 0) || 1;
-    const plan = normalisePlan(extra.plan);
 
-    const legendCats = new Set();
-    map.collections.forEach((c) => (c.formats || []).forEach((f) => { if (!(c.slack || []).length) legendCats.add(f.category); }));
-    const hasSlack = map.collections.some((c) => (c.slack || []).length);
     const legend = [
-      ...[...legendCats].map((k) => `<span><i style="background:${CAT[k] || CAT.Other}"></i>${esc(k)}</span>`),
-      ...(hasSlack ? SLACK_PARTS.map(([, l, c]) => `<span><i style="background:${c}"></i>${l}</span>`) : []),
-      `<span><i class="hatch"></i>Counted, not yet readable</span>`,
-      ...((map.relationships || []).length ? [`<span><i class="dashed"></i>Referenced, not included</span>`] : []),
+      `<span><i class="lg-solid"></i>Collected</span>`,
+      `<span><i class="lg-check"></i>Check this data</span>`,
+      `<span><i class="lg-todo"></i>Not collected yet</span>`,
     ].join("");
+    const evidence = company && company.evidence && company.evidence.length
+      ? `Detected from ${company.evidence.length > 1 ? company.evidence.slice(0, -1).join(", ") + " and " + company.evidence[company.evidence.length - 1] : company.evidence[0]}`
+      : company ? "Set by you" : "We couldn't tell whose data this is yet";
 
     root.innerHTML = `
       <div class="map-head reveal">
         <div>
-          <p class="eyebrow">Your data map</p>
-          <h1>Here's what you have</h1>
+          <p class="eyebrow">Data map</p>
+          <h1 class="company-name" id="company-name">${esc(company ? company.name : "Your data")}</h1>
+          <div class="company-src" id="company-src">${esc(evidence)} · <button class="link-btn" data-act="edit-company">${company ? "Edit" : "Add company name"}</button></div>
           <div class="map-id">Assessment ${esc(map.assessment_id)} · ${esc(map.app)} ${esc(map.app_version)} · rules ${esc(map.ruleset_version)}</div>
         </div>
         <div class="actions">
@@ -612,6 +442,30 @@
       root.querySelectorAll("[data-count]").forEach((el) => countUp(el, +el.dataset.count, el.dataset.fmt));
     });
     root.querySelector('[data-act="save"]').onclick = handlers.onSave;
+    // Edit the company name in place; kept with the owner's other choices.
+    root.querySelector('[data-act="edit-company"]').onclick = () => {
+      const h = root.querySelector("#company-name");
+      const src = root.querySelector("#company-src");
+      h.innerHTML = `<input class="company-input" maxlength="80" value="${esc(company ? company.name : "")}" placeholder="Company name" aria-label="Company name">`;
+      src.innerHTML = `<button class="btn primary small" data-co="save">Save</button> <button class="btn ghost small" data-co="cancel">Cancel</button>${plan.company ? ` <button class="link-btn" data-co="reset">Use detected name</button>` : ""}`;
+      const input = h.querySelector("input");
+      input.focus(); input.select();
+      const done = (value) => { plan.company = value; handlers.onPlan && handlers.onPlan(plan); render(root, map, handlers, { ...extra, plan, banner: "" }); };
+      src.querySelector('[data-co="save"]').onclick = () => done(input.value.trim() || null);
+      src.querySelector('[data-co="cancel"]').onclick = () => render(root, map, handlers, { ...extra, plan, banner: "" });
+      const reset = src.querySelector('[data-co="reset"]');
+      if (reset) reset.onclick = () => done(null);
+      input.onkeydown = (e) => { if (e.key === "Enter") done(input.value.trim() || null); if (e.key === "Escape") src.querySelector('[data-co="cancel"]').click(); };
+    };
+    // A platform bubble opens its card.
+    root.querySelectorAll(".pm-node").forEach((g) => {
+      const go = () => {
+        const card = root.querySelector(`.pcard[data-plat="${g.dataset.plat}"]`);
+        if (card) { card.scrollIntoView({ behavior: "smooth", block: "start" }); card.classList.add("flash"); setTimeout(() => card.classList.remove("flash"), 1600); }
+      };
+      g.onclick = go;
+      g.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } };
+    });
     root.querySelector('[data-act="restart"]').onclick = handlers.onRestart;
     root.querySelector('[data-act="pack"]').onclick = handlers.onPack;
     root.querySelectorAll('[data-act="adddata"]').forEach((b) => (b.onclick = () => handlers.onAddData(b)));
@@ -629,6 +483,7 @@
       removed: Array.isArray(p.removed) ? p.removed : [],
       done: Array.isArray(p.done) ? p.done : [],
       kept: Array.isArray(p.kept) ? p.kept : [],
+      company: typeof p.company === "string" && p.company.trim() ? p.company.trim().slice(0, 80) : null,
     };
   }
   const catalogName = (map, id) => ((map.source_catalog || []).find((s) => s.id === id) || {}).name || id;
@@ -772,6 +627,18 @@
           notes.push(`<div class="pc-note warn"><span><b>Only one person's messages.</b> A Discord data package holds only the messages written by the account that requested it; other people's replies aren't in it. For whole servers, an admin can export channels with a tool such as DiscordChatExporter.</span><span class="pc-note-act">${act("How to export", () => handlers.onGuide("export:discord"))}</span></div>`);
         }
       }
+      if (p === "teams" && map.teams_files && map.teams_files.referenced) {
+        const tf = map.teams_files, miss = tf.referenced - tf.found;
+        const manual = miss > 0 && doneByHand.has("teams-files");
+        if (miss <= 0) notes.push(`<div class="pc-note ok">All ${num(tf.referenced)} files linked from Teams messages are in your map.</div>`);
+        else {
+          if (!manual) partial = true;
+          notes.push(`<div class="pc-note ${manual ? "" : "warn"}"><span>${manual ? "You marked the linked files as done." : tf.found
+            ? `<b>${num(tf.found)} of ${num(tf.referenced)} files shared in Teams are in your map.</b> The rest live in SharePoint or OneDrive: add that folder here, or ask your Microsoft 365 admin to include linked files in the export.`
+            : `<b>${num(tf.referenced)} files are linked from Teams messages but not in your map.</b> They live in SharePoint or OneDrive: add that folder here, or ask your Microsoft 365 admin to include linked files in the eDiscovery export.`}</span>
+            <span class="pc-note-act">${manual ? act("Undo", undoDone("teams-files"), "ghost") : act("Mark as done", markDone("teams-files"), "ghost")}</span></div>`);
+        }
+      }
       if (p === "teams") {
         const m = list.reduce((a, c) => a + (c.teams ? c.teams.messages - c.teams.messages_also_in_other_items : 0), 0);
         const ch = list.reduce((a, c) => a + (c.teams ? c.teams.channels + c.teams.chats : 0), 0);
@@ -798,7 +665,7 @@
       // Links to the platform (e.g. discord.com), not necessarily to this export.
       const linkText = s && s.links && linkers.length ? `Your other data mentions ${pname(p)}: ${num(s.links)} ${s.links === 1 ? "link" : "links"} in ${num(linkers.length)} ${linkers.length === 1 ? "item" : "items"}` : "";
       const suspect = list.some((c) => c.linkage && c.linkage.status === "unlinked");
-      return `<div class="pcard">
+      return `<div class="pcard" data-plat="${esc(p)}">
         <div class="pc-head">
           <div class="pc-title"><h3>${esc(pname(p))}</h3><span class="pill ${suspect ? "check" : partial ? "partial" : "ok"}">${suspect ? "Check this data" : partial ? "Partly collected" : "Collected ✓"}</span></div>
           <div class="pc-facts">${facts.map(esc).join(" · ")}</div>
@@ -837,7 +704,7 @@
         <div class="sp-bar"><span style="width:${pctDone}%"></span></div>
       </div>` : ""}
       ${collected.map(platformCard).join("")}
-      ${loose.length ? `<div class="pcard"><div class="pc-head"><div class="pc-title"><h3>Other files</h3></div><div class="pc-facts">${num(loose.length)} ${loose.length === 1 ? "item" : "items"} not tied to a platform</div></div>${itemTable(loose, null)}</div>` : ""}
+      ${loose.length ? `<div class="pcard" data-plat="other"><div class="pc-head"><div class="pc-title"><h3>Other files</h3></div><div class="pc-facts">${num(loose.length)} ${loose.length === 1 ? "item" : "items"} not tied to a platform</div></div>${itemTable(loose, null)}</div>` : ""}
       ${todos.length ? `<div class="card todo-card"><div class="todo-head"><h3>Not collected yet</h3><p>Platforms your data links to or mentions. Add their exports, or remove any that aren't yours.</p></div>${todos.map(todoRow).join("")}</div>` : ""}
       ${other.length ? `<div class="step-other card"><b>Also worth doing</b><ul>${other.map((o) => `<li>${esc(o)}</li>`).join("")}</ul></div>` : ""}
       ${removedSources.length ? `<div class="removed-line">${num(removedSources.length)} removed: ${removedSources.map((s) => `<button class="link-btn" data-restore="${esc(s.id)}">${esc(s.name)} ↺</button>`).join(" ")}</div>` : ""}

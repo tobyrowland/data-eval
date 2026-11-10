@@ -50,6 +50,11 @@ pub struct TeamsRecogniser {
     monthly: BTreeMap<String, u64>,
     /// A PST that looks like a Teams eDiscovery export (counted, not read).
     pub pst_files: u64,
+    /// Team names ("PixPaint Engineering"). Local only.
+    pub team_names: BTreeSet<String>,
+    /// Files that messages link to (SharePoint, OneDrive), by normalised
+    /// file name. Local only: used to match linked files added later.
+    pub referenced_files: BTreeSet<String>,
     pub languages: super::language::LanguageTally,
     pub sources: super::sources::SourceTally,
 }
@@ -75,6 +80,46 @@ pub fn parse_time(s: &str) -> Option<i64> {
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146_097 + doe - 719_468;
     Some(days * 86_400 + hh * 3600 + mm * 60 + ss)
+}
+
+/// Lower-case, URL-decoded file name, as files are matched by name.
+pub fn normalise_file_name(name: &str) -> String {
+    let mut out = Vec::new();
+    let b = name.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&name[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).trim().to_lowercase()
+}
+
+/// The file a message attachment points to, if it is a file (not a card or
+/// a quoted message).
+fn attachment_file_name(a: &Value) -> Option<String> {
+    let kind = a.get("contentType").and_then(Value::as_str).unwrap_or("");
+    if kind.starts_with("application/vnd.microsoft.card") || kind == "messageReference" {
+        return None;
+    }
+    let name = a
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|n| !n.trim().is_empty())
+        .map(String::from)
+        .or_else(|| {
+            let url = a.get("contentUrl").and_then(Value::as_str)?;
+            let path = url.split(['?', '#']).next()?;
+            Some(path.rsplit('/').next()?.to_string())
+        })?;
+    let n = normalise_file_name(&name);
+    (n.contains('.') && n.len() > 2).then_some(n)
 }
 
 fn is_chat_message(o: &serde_json::Map<String, Value>) -> bool {
@@ -124,6 +169,9 @@ impl TeamsRecogniser {
                 } else if lower == "teamslist" || o.get("resourceProvisioningOptions").is_some() {
                     if let Some(id) = o.get("id").and_then(Value::as_str) {
                         self.teams.insert(id.to_string());
+                    }
+                    if let Some(n) = o.get("displayName").and_then(Value::as_str) {
+                        self.team_names.insert(n.to_string());
                     }
                 }
             }
@@ -208,6 +256,16 @@ impl TeamsRecogniser {
         }
         let by_person =
             user.is_some() && o.get("messageType").and_then(Value::as_str) == Some("message");
+        for a in o
+            .get("attachments")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(name) = attachment_file_name(a) {
+                self.referenced_files.insert(name);
+            }
+        }
         let time = o.get("createdDateTime").and_then(Value::as_str);
         let text = o
             .get("body")

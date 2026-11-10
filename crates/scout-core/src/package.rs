@@ -138,6 +138,8 @@ pub fn plan(inv: &Inventory) -> Plan {
         .collect();
 
     let snapshots = crate::report::code_snapshots(inv);
+    let teams_files =
+        crate::report::teams_file_collections(inv, &crate::report::teams_file_matches(inv).1);
     let mut entries = Vec::new();
     for c in &inv.collections {
         let t = &inv.text[c.id as usize];
@@ -148,109 +150,145 @@ pub fn plan(inv: &Inventory) -> Plan {
             Some(snap) => snap.display_label(),
             None => crate::report::display_label_for(c, t),
         };
-        let (kind, folders, action): (&'static str, Vec<String>, Action) =
-            if c.source_kind == SourceKind::SlackExport {
-                (
-                    "Slack export",
-                    vec!["Slack".into()],
-                    if is_dir {
-                        Action::CopyDir {
-                            src: c.source.clone(),
-                            name: Some(c.label.clone()),
-                        }
-                    } else {
-                        Action::CopyFile(c.source.clone())
-                    },
-                )
-            } else if attachment_cols.contains(&c.id) && is_dir {
-                (
-                    "Slack attachments",
-                    vec!["Slack/Attachments".into()],
-                    Action::CopyDir {
-                        src: c.source.clone(),
-                        name: None,
-                    },
-                )
-            } else if !t.takeout_products.is_empty() {
-                let folders = t
-                    .takeout_products
-                    .iter()
-                    .map(|p| product_folder(p))
-                    .collect();
-                let ext = c.label.to_ascii_lowercase();
-                let action = if is_dir {
-                    Action::TakeoutDir(c.source.clone())
-                } else if ext.ends_with(".zip") {
-                    Action::TakeoutZip(c.source.clone())
-                } else {
-                    // .tgz Takeouts are copied as they are.
-                    Action::CopyFile(c.source.clone())
-                };
-                ("Google Takeout", folders, action)
-            } else if let Some(snap) = snapshot {
-                (
-                    "Code download",
-                    vec![format!("Code/{}", snap.repo().replace('/', "-"))],
-                    if is_dir {
-                        Action::CopyDir {
-                            src: c.source.clone(),
-                            name: None,
-                        }
-                    } else {
-                        Action::CopyFile(c.source.clone())
-                    },
-                )
-            } else if !t.git_remotes.is_empty() && is_dir {
-                let r = t.git_remotes.iter().next().unwrap();
-                let repo = r
-                    .split_once('/')
-                    .map_or(r.as_str(), |x| x.1)
-                    .replace('/', "-");
-                (
-                    "Git repository",
-                    vec![format!("Code/{repo}")],
-                    Action::CopyDir {
-                        src: c.source.clone(),
-                        name: None,
-                    },
-                )
-            } else if !formats.is_empty()
-                && formats
-                    .iter()
-                    .all(|f| matches!(f, Format::Mbox | Format::Eml))
-            {
-                (
-                    "Email",
-                    vec!["Email".into()],
-                    if is_dir {
-                        Action::CopyDir {
-                            src: c.source.clone(),
-                            name: Some(c.label.clone()),
-                        }
-                    } else {
-                        Action::CopyFile(c.source.clone())
-                    },
-                )
-            } else if is_dir {
-                (
-                    "Folder",
-                    vec!["Documents".into()],
+        let (kind, folders, action): (&'static str, Vec<String>, Action) = if c.source_kind
+            == SourceKind::SlackExport
+        {
+            (
+                "Slack export",
+                vec!["Slack".into()],
+                if is_dir {
                     Action::CopyDir {
                         src: c.source.clone(),
                         name: Some(c.label.clone()),
-                    },
-                )
+                    }
+                } else {
+                    Action::CopyFile(c.source.clone())
+                },
+            )
+        } else if inv.teams[c.id as usize].is_teams() || inv.discord[c.id as usize].is_discord() {
+            let folder = if inv.teams[c.id as usize].is_teams() {
+                "Microsoft Teams"
             } else {
-                let doc = formats
-                    .iter()
-                    .any(|f| f.category() == "Documents" || f.category() == "Tables");
-                let folder = if doc { "Documents" } else { "Other" };
-                (
-                    "File",
-                    vec![folder.into()],
-                    Action::CopyFile(c.source.clone()),
-                )
+                "Discord"
             };
+            (
+                if folder == "Discord" {
+                    "Discord export"
+                } else {
+                    "Teams export"
+                },
+                vec![folder.into()],
+                if is_dir {
+                    Action::CopyDir {
+                        src: c.source.clone(),
+                        name: Some(c.label.clone()),
+                    }
+                } else {
+                    Action::CopyFile(c.source.clone())
+                },
+            )
+        } else if teams_files.contains(&c.id) {
+            (
+                "Teams linked files",
+                vec!["Microsoft Teams/Linked files".into()],
+                if is_dir {
+                    Action::CopyDir {
+                        src: c.source.clone(),
+                        name: None,
+                    }
+                } else {
+                    Action::CopyFile(c.source.clone())
+                },
+            )
+        } else if attachment_cols.contains(&c.id) && is_dir {
+            (
+                "Slack attachments",
+                vec!["Slack/Attachments".into()],
+                Action::CopyDir {
+                    src: c.source.clone(),
+                    name: None,
+                },
+            )
+        } else if !t.takeout_products.is_empty() {
+            let folders = t
+                .takeout_products
+                .iter()
+                .map(|p| product_folder(p))
+                .collect();
+            let ext = c.label.to_ascii_lowercase();
+            let action = if is_dir {
+                Action::TakeoutDir(c.source.clone())
+            } else if ext.ends_with(".zip") {
+                Action::TakeoutZip(c.source.clone())
+            } else {
+                // .tgz Takeouts are copied as they are.
+                Action::CopyFile(c.source.clone())
+            };
+            ("Google Takeout", folders, action)
+        } else if let Some(snap) = snapshot {
+            (
+                "Code download",
+                vec![format!("Code/{}", snap.repo().replace('/', "-"))],
+                if is_dir {
+                    Action::CopyDir {
+                        src: c.source.clone(),
+                        name: None,
+                    }
+                } else {
+                    Action::CopyFile(c.source.clone())
+                },
+            )
+        } else if !t.git_remotes.is_empty() && is_dir {
+            let r = t.git_remotes.iter().next().unwrap();
+            let repo = r
+                .split_once('/')
+                .map_or(r.as_str(), |x| x.1)
+                .replace('/', "-");
+            (
+                "Git repository",
+                vec![format!("Code/{repo}")],
+                Action::CopyDir {
+                    src: c.source.clone(),
+                    name: None,
+                },
+            )
+        } else if !formats.is_empty()
+            && formats
+                .iter()
+                .all(|f| matches!(f, Format::Mbox | Format::Eml))
+        {
+            (
+                "Email",
+                vec!["Email".into()],
+                if is_dir {
+                    Action::CopyDir {
+                        src: c.source.clone(),
+                        name: Some(c.label.clone()),
+                    }
+                } else {
+                    Action::CopyFile(c.source.clone())
+                },
+            )
+        } else if is_dir {
+            (
+                "Folder",
+                vec!["Documents".into()],
+                Action::CopyDir {
+                    src: c.source.clone(),
+                    name: Some(c.label.clone()),
+                },
+            )
+        } else {
+            let doc = formats
+                .iter()
+                .any(|f| f.category() == "Documents" || f.category() == "Tables");
+            let folder = if doc { "Documents" } else { "Other" };
+            (
+                "File",
+                vec![folder.into()],
+                Action::CopyFile(c.source.clone()),
+            )
+        };
         entries.push(PlanEntry {
             collection: display,
             folders,

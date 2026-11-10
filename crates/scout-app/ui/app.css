@@ -575,3 +575,34 @@ body.dragging .drag-veil-card { transform: scale(1); }
 @keyframes rowflash { 0%, 60% { background: #FCEBC4; } 100% { background: transparent; } }
 .guide-callout.warn { background: #FDF4E3; border-color: #F1D9A8; }
 @media (max-width: 760px) { .link-warn { flex-wrap: wrap; } }
+
+/* ---------- simple platform map and company name */
+.company-name { margin: 2px 0 2px; }
+.company-src { color: var(--muted); font-size: 13px; }
+.company-src .link-btn { font-size: 13px; }
+.company-input { font: inherit; font-size: 30px; font-weight: 700; letter-spacing: -0.02em; border: 1px solid var(--line); border-radius: 10px; padding: 2px 10px; width: min(560px, 100%); color: var(--ink); background: var(--surface); }
+.pmap { width: 100%; height: auto; display: block; }
+.pm-spoke { stroke: #D9E1EA; stroke-width: 1.5; }
+.pm-hub circle { fill: var(--ink); }
+.pm-hub-name { fill: #fff; font-size: 17px; font-weight: 750; text-anchor: middle; letter-spacing: -0.01em; }
+.pm-hub-sub { fill: rgba(255,255,255,.75); font-size: 12px; text-anchor: middle; }
+.pm-node { cursor: pointer; outline: none; }
+.pm-node circle { fill: color-mix(in srgb, var(--c) 12%, white); stroke: var(--c); stroke-width: 2.5; transition: transform .15s ease, fill .15s ease; transform-box: fill-box; transform-origin: center; }
+.pm-node:hover circle, .pm-node:focus-visible circle { fill: color-mix(in srgb, var(--c) 20%, white); transform: scale(1.04); }
+.pm-node.suspect circle { stroke: #E3A13B; stroke-dasharray: 7 5; fill: #FFF8EC; }
+.pm-name { font-size: 13.5px; font-weight: 700; text-anchor: middle; fill: var(--ink); }
+.pm-value { font-size: 19px; font-weight: 750; text-anchor: middle; fill: var(--ink); letter-spacing: -0.02em; }
+.pm-unit { font-size: 11.5px; text-anchor: middle; fill: var(--muted); }
+.pm-badge rect { fill: #FCF1DE; stroke: #F1D9A8; }
+.pm-badge text { font-size: 11.5px; font-weight: 650; fill: #8A5A0B; text-anchor: middle; }
+.pm-badge.check rect { fill: #FDF4E3; stroke: #E3A13B; }
+.pm-todo-title { font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; fill: var(--muted); text-anchor: middle; }
+.pm-todo rect { fill: none; stroke: #B7C2CF; stroke-dasharray: 4 4; }
+.pm-todo text { font-size: 12px; fill: var(--ink-2); text-anchor: middle; }
+.legend i.lg-solid { background: #fff; border: 2.5px solid #6D5BD0; border-radius: 50%; }
+.legend i.lg-check { background: #FFF8EC; border: 2px dashed #E3A13B; border-radius: 50%; }
+.legend i.lg-todo { background: none; border: 1.5px dashed #B7C2CF; border-radius: 50%; }
+.pcard.flash { animation: cardflash 1.6s ease; }
+@keyframes cardflash { 0%, 60% { box-shadow: 0 0 0 3px #F1D9A8; } 100% { box-shadow: 0 1px 2px rgba(15,23,42,.04); } }
+
+.map-head .actions .btn { white-space: nowrap; }
