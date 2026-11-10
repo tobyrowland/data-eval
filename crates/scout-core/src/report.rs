@@ -928,11 +928,26 @@ fn linkages(inv: &Inventory, col_hashes: &[Vec<&str>]) -> Vec<Linkage> {
             .collect();
     }
     // How many items hold each identifier; shared means held by another too.
+    // Names, not ordinary words: judged on lower-case use across all items.
+    let mut all_lower: HashMap<u64, u32> = HashMap::new();
+    for t in &inv.text {
+        for (k, v) in &t.fingerprint.lower {
+            *all_lower.entry(*k).or_default() += v;
+        }
+    }
     let terms: Vec<HashSet<u64>> = inv
         .text
         .iter()
-        .map(|t| t.fingerprint.top_terms(300).into_iter().collect())
+        .map(|t| {
+            t.fingerprint
+                .distinctive_terms(300, &all_lower)
+                .into_iter()
+                .collect()
+        })
         .collect();
+    // Enough names in common to show a connection by themselves.
+    let names_needed =
+        |a: usize, b: usize| -> usize { 8.max(terms[a].len().min(terms[b].len()) / 10) };
     let mut people: HashMap<u64, u32> = HashMap::new();
     let mut addresses: HashMap<u64, u32> = HashMap::new();
     let mut orgs: HashMap<&str, u32> = HashMap::new();
@@ -1045,6 +1060,28 @@ fn linkages(inv: &Inventory, col_hashes: &[Vec<&str>]) -> Vec<Linkage> {
             }
         }
     }
+    // A Discord server that other items link to (discord.com/channels/<id>).
+    for c in &inv.collections {
+        let i = c.id as usize;
+        let servers = inv.discord[i].servers();
+        if servers.is_empty() {
+            continue;
+        }
+        for (o, ts) in all_targets.iter().enumerate() {
+            if o == i {
+                continue;
+            }
+            let hit = ts.iter().any(|t| {
+                ["discord.com/channels/", "discordapp.com/channels/"]
+                    .iter()
+                    .filter_map(|p| t.find(p).map(|at| &t[at + p.len()..]))
+                    .any(|rest| servers.contains(rest.split('/').next().unwrap_or("")))
+            });
+            if hit {
+                tie(c.id, o as u32);
+            }
+        }
+    }
     // Date ranges from message timestamps.
     let range = |i: usize| -> Option<(i64, i64)> {
         let s = inv.slack[i].inventories();
@@ -1077,7 +1114,9 @@ fn linkages(inv: &Inventory, col_hashes: &[Vec<&str>]) -> Vec<Linkage> {
                 let others: Vec<(i64, i64)> = (0..n).filter(|&o| o != i).filter_map(|o| ranges[o]).collect();
                 (!others.is_empty()).then(|| others.iter().any(|&(c, d)| a <= d && c <= b))
             });
-            let identity = f.people.len() + f.addresses.len() >= 3 || terms[i].len() >= 20 || !f.orgs.is_empty();
+            // Whose data it is: its own people, addresses or organisations.
+            let own_identity = !f.people.is_empty() || !f.addresses.is_empty() || !f.orgs.is_empty();
+            let enough_names = shared_names as usize >= 8.max(terms[i].len() / 10);
             let mut l = Linkage {
                 status: "linked",
                 shared_people,
@@ -1097,7 +1136,7 @@ fn linkages(inv: &Inventory, col_hashes: &[Vec<&str>]) -> Vec<Linkage> {
                 }
                 _ => String::new(),
             };
-            if direct[i] > 0 || shared_people + shared_addresses + shared_organisations > 0 || shared_names >= 8 {
+            if direct[i] > 0 || shared_people + shared_addresses + shared_organisations > 0 || enough_names {
                 let mut parts = Vec::new();
                 if shared_people > 0 {
                     parts.push(plural(shared_people, "person", "people"));
@@ -1115,21 +1154,28 @@ fn linkages(inv: &Inventory, col_hashes: &[Vec<&str>]) -> Vec<Linkage> {
                     parts.push("direct links (shared messages, files or references)".to_string());
                 }
                 l.explanation = format!("Connected to your other data: {} in common.", parts.join(", "));
-            } else if !identity {
-                l.status = "unknown";
-                l.explanation = "Too little in it to tell whether it is connected to the rest.".to_string();
-            } else if shared_names >= 3 || dates_overlap == Some(true) {
+            } else if own_identity {
+                // It says whose data it is, and none of it matches: a few
+                // names or overlapping dates in common don't change that.
+                l.status = "unlinked";
+                l.explanation = format!(
+                    "Shares no people, email addresses or domains with your other data{}{dates_note}. Check that it belongs to the same organisation.",
+                    if shared_names > 0 { " (a few names in common don't count)" } else { "" }
+                );
+            } else if shared_names >= 3 {
                 l.status = "weak";
                 l.explanation = format!(
-                    "Only loosely connected: no people, addresses or domains in common{}{}.",
-                    if shared_names > 0 { format!(", {}", plural(shared_names, "name", "names")) } else { String::new() },
-                    if dates_overlap == Some(true) { ", overlapping dates" } else { "" }
+                    "Only loosely connected: it names no people or organisations, and has {} in common with your other data.",
+                    plural(shared_names, "name", "names")
                 );
-            } else {
+            } else if terms[i].len() >= 20 {
                 l.status = "unlinked";
                 l.explanation = format!(
                     "Shares no people, email addresses, domains or names with your other data{dates_note}. Check that it belongs to the same organisation."
                 );
+            } else {
+                l.status = "unknown";
+                l.explanation = "Too little in it to tell whether it is connected to the rest.".to_string();
             }
             l
         })
@@ -1148,7 +1194,7 @@ fn linkages(inv: &Inventory, col_hashes: &[Vec<&str>]) -> Vec<Linkage> {
         x.people.iter().any(|k| y.people.contains(k))
             || x.addresses.iter().any(|k| y.addresses.contains(k))
             || x.orgs.iter().any(|k| y.orgs.contains(k))
-            || terms[a].intersection(&terms[b]).count() >= 8
+            || terms[a].intersection(&terms[b]).count() >= names_needed(a, b)
     };
     let mut group: Vec<usize> = (0..n).collect();
     fn root(g: &mut [usize], mut i: usize) -> usize {

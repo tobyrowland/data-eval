@@ -102,7 +102,13 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
    - whether its dates overlap the other items' dates
 
    Public services such as gmail.com, github.com and teams.microsoft.com
-   never count as a connection. An item with nothing in common gets an amber
+   never count as a connection. An item that names its own people,
+   addresses or organisation, none of which appear in the rest of the data,
+   is flagged even if a few names or its dates happen to coincide. Names
+   only count when they are names: words also used in lower case ("Canvas",
+   "release") and common first names are ignored. A Discord server or Teams
+   tenant that the rest of the data links to (`discord.com/channels/<id>`,
+   `tenantId=` in a Teams link) counts as a direct connection. An item with nothing in common gets an amber
    warning at the top of the platforms section and a "Not linked to your
    other data" badge on its row, for example "Shares no people, email
    addresses, domains or names with your other data, and its dates (2026)

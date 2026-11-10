@@ -734,10 +734,10 @@
         <tbody>${rows}</tbody></table></div>`;
     }
     // Items that only link to a platform, with how many of their files do.
-    function linkedFrom(labels, service, summaryText) {
+    function linkedFrom(labels, service, summaryText, tip) {
       const list = labels.filter(colOf);
       if (!list.length) return "";
-      return `<details class="pc-links"><summary>${esc(summaryText)}</summary>
+      return `<details class="pc-links"><summary${tip ? ` title="${esc(tip)}"` : ""}>${esc(summaryText)}</summary>
         ${list.map((l) => {
           const n = ((extra.linkCounts || {})[l] || {})[service] || 0;
           return `<div class="lf-row" data-label="${esc(l)}" data-service="${esc(service)}"><span><b>${esc(trunc(nameOf(l), 60))}</b>${n ? ` <span class="muted">· links in ${num(n)} ${n === 1 ? "file" : "files"}</span>` : ""}</span>
@@ -795,15 +795,17 @@
       if (dups) notes.push(`<div class="pc-note warn"><span><b>${num(dups)} ${dups === 1 ? "item looks" : "items look"} like a duplicate</b> of another item. Removing ${dups === 1 ? "it" : "them"} loses nothing.</span></div>`);
       const own = new Set(list.map((c) => c.label));
       const linkers = s ? (s.referenced_from || []).filter((l) => !own.has(l)) : [];
-      const linkText = s && s.links ? `Linked from ${num(linkers.length)} other ${linkers.length === 1 ? "item" : "items"} · ${num(s.links)} links` : "";
+      // Links to the platform (e.g. discord.com), not necessarily to this export.
+      const linkText = s && s.links && linkers.length ? `Your other data mentions ${pname(p)}: ${num(s.links)} ${s.links === 1 ? "link" : "links"} in ${num(linkers.length)} ${linkers.length === 1 ? "item" : "items"}` : "";
+      const suspect = list.some((c) => c.linkage && c.linkage.status === "unlinked");
       return `<div class="pcard">
         <div class="pc-head">
-          <div class="pc-title"><h3>${esc(pname(p))}</h3><span class="pill ${partial ? "partial" : "ok"}">${partial ? "Partly collected" : "Collected ✓"}</span></div>
+          <div class="pc-title"><h3>${esc(pname(p))}</h3><span class="pill ${suspect ? "check" : partial ? "partial" : "ok"}">${suspect ? "Check this data" : partial ? "Partly collected" : "Collected ✓"}</span></div>
           <div class="pc-facts">${facts.map(esc).join(" · ")}</div>
         </div>
         ${notes.join("")}
         ${itemTable(list, p)}
-        ${linkText ? linkedFrom(linkers, p, linkText) : ""}
+        ${linkText ? linkedFrom(linkers, p, linkText, `Links to ${pname(p)} as a platform, not necessarily to the data in this card.`) : ""}
       </div>`;
     }
     function todoRow(t) {
