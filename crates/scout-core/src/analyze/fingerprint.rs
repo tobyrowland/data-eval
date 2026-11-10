@@ -26,6 +26,223 @@ pub struct Fingerprint {
     pub orgs: BTreeSet<String>,
     /// Distinctive capitalised terms, with how often they appear.
     pub terms: HashMap<u64, u32>,
+    /// How often words appear in lower case. A capitalised word that is
+    /// also used as an ordinary word ("Canvas", "release") is not a name.
+    pub lower: HashMap<u64, u32>,
+}
+
+/// Common first names, which coincide between unrelated companies. People
+/// are matched by full name instead.
+fn is_common_first_name(w: &str) -> bool {
+    const NAMES: &[&str] = &[
+        "james",
+        "john",
+        "robert",
+        "michael",
+        "william",
+        "david",
+        "richard",
+        "joseph",
+        "thomas",
+        "charles",
+        "chris",
+        "christopher",
+        "daniel",
+        "dan",
+        "matthew",
+        "matt",
+        "anthony",
+        "mark",
+        "paul",
+        "steven",
+        "steve",
+        "andrew",
+        "andy",
+        "kevin",
+        "brian",
+        "george",
+        "edward",
+        "ed",
+        "ryan",
+        "jason",
+        "jacob",
+        "gary",
+        "eric",
+        "jonathan",
+        "jon",
+        "stephen",
+        "larry",
+        "justin",
+        "scott",
+        "brandon",
+        "ben",
+        "benjamin",
+        "sam",
+        "samuel",
+        "frank",
+        "greg",
+        "alex",
+        "alexander",
+        "patrick",
+        "jack",
+        "dennis",
+        "jerry",
+        "tyler",
+        "aaron",
+        "adam",
+        "henry",
+        "nathan",
+        "peter",
+        "pete",
+        "zach",
+        "kyle",
+        "noah",
+        "ethan",
+        "jeremy",
+        "simon",
+        "luke",
+        "max",
+        "leo",
+        "oliver",
+        "harry",
+        "charlie",
+        "tom",
+        "tim",
+        "toby",
+        "nick",
+        "mike",
+        "joe",
+        "bob",
+        "bill",
+        "jim",
+        "rob",
+        "will",
+        "liam",
+        "lucas",
+        "mason",
+        "logan",
+        "owen",
+        "dev",
+        "mary",
+        "patricia",
+        "jennifer",
+        "linda",
+        "elizabeth",
+        "liz",
+        "barbara",
+        "susan",
+        "jessica",
+        "sarah",
+        "karen",
+        "nancy",
+        "lisa",
+        "betty",
+        "margaret",
+        "sandra",
+        "ashley",
+        "kim",
+        "kimberly",
+        "emily",
+        "donna",
+        "michelle",
+        "carol",
+        "amanda",
+        "dorothy",
+        "melissa",
+        "deborah",
+        "stephanie",
+        "rebecca",
+        "laura",
+        "sharon",
+        "cynthia",
+        "kathleen",
+        "amy",
+        "anna",
+        "anne",
+        "ann",
+        "emma",
+        "olivia",
+        "sophia",
+        "sophie",
+        "isabella",
+        "mia",
+        "ava",
+        "charlotte",
+        "amelia",
+        "grace",
+        "chloe",
+        "lucy",
+        "ella",
+        "hannah",
+        "kate",
+        "katie",
+        "rachel",
+        "julia",
+        "julie",
+        "claire",
+        "helen",
+        "jane",
+        "maria",
+        "nina",
+        "noor",
+        "lin",
+        "mira",
+        "eva",
+        "zoe",
+        "lily",
+        "ruby",
+        "alice",
+        "rose",
+        "ellie",
+        "jade",
+        "beth",
+        "ali",
+        "omar",
+        "ahmed",
+        "mohammed",
+        "muhammad",
+        "raj",
+        "priya",
+        "anil",
+        "wei",
+        "li",
+        "chen",
+        "yuki",
+        "hiro",
+        "ivan",
+        "olga",
+        "anton",
+        "lukas",
+        "jan",
+        "lars",
+        "erik",
+        "sven",
+        "pierre",
+        "marie",
+        "jean",
+        "luca",
+        "marco",
+        "giulia",
+        "carlos",
+        "juan",
+        "jose",
+        "ana",
+        "pablo",
+        "diego",
+        "laszlo",
+        "gabor",
+        "zoltan",
+        "istvan",
+        "peter",
+        "andras",
+        "balazs",
+        "eszter",
+        "katalin",
+        "zsofia",
+        "anita",
+        "judit",
+    ];
+    NAMES.contains(&w)
 }
 
 fn hash(s: &str) -> u64 {
@@ -391,6 +608,15 @@ impl Fingerprint {
                 let code_host = ["github.com", "gitlab.com", "bitbucket.org"]
                     .iter()
                     .find(|h| host == **h || host.ends_with(&format!(".{h}")));
+                // A Teams link names its organisation's tenant.
+                if host == "teams.microsoft.com" {
+                    if let Some(t) = path
+                        .split(['?', '&'])
+                        .find_map(|kv| kv.strip_prefix("tenantId="))
+                    {
+                        self.add_org(t);
+                    }
+                }
                 if let Some(h) = code_host {
                     if let Some(owner) = path.trim_start_matches('/').split('/').next() {
                         if !owner.is_empty() && self.orgs.len() < MAX_IDS {
@@ -423,6 +649,13 @@ impl Fingerprint {
             if !(3..=30).contains(&len) || w.chars().any(|c| c.is_ascii_digit()) {
                 continue;
             }
+            if w.chars().all(|c| c.is_lowercase()) {
+                let h = hash(w);
+                if self.lower.len() < MAX_TERMS * 10 || self.lower.contains_key(&h) {
+                    *self.lower.entry(h).or_default() += 1;
+                }
+                continue;
+            }
             let acronym = len >= 4 && w.chars().all(|c| c.is_uppercase());
             let capitalised =
                 first.is_uppercase() && chars.clone().any(|c| c.is_lowercase()) && !starts_sentence;
@@ -430,7 +663,7 @@ impl Fingerprint {
                 continue;
             }
             let lower = w.to_lowercase();
-            if is_common_term(&lower) {
+            if is_common_term(&lower) || is_common_first_name(&lower) {
                 continue;
             }
             if self.terms.len() < MAX_TERMS || self.terms.contains_key(&hash(&lower)) {
@@ -506,6 +739,23 @@ impl Fingerprint {
         for (k, v) in &o.terms {
             *self.terms.entry(*k).or_default() += v;
         }
+        for (k, v) in &o.lower {
+            *self.lower.entry(*k).or_default() += v;
+        }
+    }
+
+    /// Terms seen at least twice that are names rather than ordinary words:
+    /// used in lower case, across all the data (`lower`), less than half as
+    /// often as capitalised. Most frequent first, at most `n`.
+    pub fn distinctive_terms(&self, n: usize, lower: &HashMap<u64, u32>) -> Vec<u64> {
+        let mut t: Vec<(u64, u32)> = self
+            .terms
+            .iter()
+            .filter(|(k, &c)| c >= 2 && lower.get(k).copied().unwrap_or(0) * 2 < c)
+            .map(|(k, c)| (*k, *c))
+            .collect();
+        t.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        t.into_iter().take(n).map(|x| x.0).collect()
     }
 
     /// Terms seen at least twice, most frequent first, at most `n`.

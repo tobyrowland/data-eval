@@ -256,3 +256,95 @@ fn a_group_of_unrelated_exports_is_flagged_together() {
     let json = serde_json::to_string(&map).unwrap();
     assert!(!json.contains("Brushwork") && !json.contains("dev.pixpaint"));
 }
+
+/// A busy main company: many messages with common first names, everyday
+/// capitalised words (also used in lower case), Discord invite links and
+/// recent dates.
+fn busy_slack(d: &Path, extra: &str) -> PathBuf {
+    let users = json!([
+        {"id": "U1", "real_name": "Ann Lee", "profile": {"real_name": "Ann Lee", "email": "ann@acme.com"}},
+        {"id": "U2", "real_name": "Bo Carter", "profile": {"real_name": "Bo Carter", "email": "bo@acme.com"}}
+    ]);
+    let mut msgs = Vec::new();
+    for i in 0..60 {
+        msgs.push(json!({"ts": format!("{}.000100", 1_767_225_600 + i * 86_400), "user": "U1",
+            "text": format!("Ask Alex and Sam about the Canvas Release for Hydra. The canvas release notes for hydra are in the doc. Join us at https://discord.gg/acme{i}. {extra}")}));
+    }
+    write(
+        d,
+        "acme-busy.zip",
+        &zip_bytes(&[
+            (
+                "channels.json",
+                json!([{"name": "eng"}]).to_string().as_bytes(),
+            ),
+            ("users.json", users.to_string().as_bytes()),
+            ("eng/2026-01-01.json", json!(msgs).to_string().as_bytes()),
+        ]),
+    )
+}
+
+fn other_company_discord(d: &Path, server: &str) -> PathBuf {
+    let user = json!({"id": "9", "username": "mira.pixpaint", "global_name": "Mira Halden", "email": "mira@pixpaint.example"});
+    let channel = json!({"id": "11", "type": "GUILD_TEXT", "name": "general", "guild": {"id": server, "name": "PixPaint"}});
+    let msgs: Vec<serde_json::Value> = (0..40)
+        .map(|i| json!({"ID": format!("{}", 100 + i), "Timestamp": "2026-03-01 09:00:00",
+            "Contents": "Alex and Sam said the Canvas Release slips; the Brushwork beta for PixPaint ships after the Brushwork review.", "Attachments": ""}))
+        .collect();
+    write(
+        d,
+        "other-discord.zip",
+        &zip_bytes(&[
+            ("Account/user.json", user.to_string().as_bytes()),
+            ("Messages/c11/channel.json", channel.to_string().as_bytes()),
+            (
+                "Messages/c11/messages.json",
+                json!(msgs).to_string().as_bytes(),
+            ),
+            (
+                "Servers/index.json",
+                format!("{{\"{server}\": \"PixPaint\"}}").as_bytes(),
+            ),
+        ]),
+    )
+}
+
+#[test]
+fn another_companys_discord_is_flagged_despite_common_names_and_dates() {
+    let d = tempdir("linkage-busy");
+    let slack = busy_slack(&d, "");
+    write(&d, "inbox.mbox", b"From x Mon\nFrom: Ann Lee <ann@acme.com>\nTo: bo@acme.com\nSubject: Hydra\n\nHydra plan.\n\n");
+    let discord = other_company_discord(&d, "555");
+    let inv = scan(
+        &[slack, d.join("inbox.mbox"), discord],
+        ScanOptions::default(),
+    );
+    let map = build_data_map(&inv);
+    let l = &col(&map, "other-discord.zip").linkage;
+    assert_eq!(l.status, "unlinked", "{l:?}");
+    assert_eq!(
+        l.shared_people + l.shared_addresses + l.shared_organisations,
+        0
+    );
+    assert_eq!(col(&map, "acme-busy.zip").linkage.status, "linked");
+}
+
+#[test]
+fn a_linked_discord_server_or_teams_tenant_connects() {
+    let d = tempdir("linkage-ties");
+    // The Slack data links to a channel on the Discord server.
+    let slack = busy_slack(
+        &d,
+        "Thread: https://discord.com/channels/555/11/100 and https://teams.microsoft.com/l/channel/19%3Aabc?groupId=g&tenantId=t-pix",
+    );
+    let discord = other_company_discord(&d, "555");
+    let teams = teams_export(&d);
+    let inv = scan(&[slack, discord, teams], ScanOptions::default());
+    let map = build_data_map(&inv);
+    let dl = &col(&map, "other-discord.zip").linkage;
+    assert_eq!(dl.status, "linked", "{dl:?}");
+    assert!(dl.direct_links > 0);
+    let tl = &col(&map, "pixpaint-teams.zip").linkage;
+    assert_eq!(tl.status, "linked", "{tl:?}");
+    assert!(tl.shared_organisations > 0, "tenant from the Teams link");
+}

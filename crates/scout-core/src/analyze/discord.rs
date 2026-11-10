@@ -245,6 +245,11 @@ impl DiscordRecogniser {
         })
     }
 
+    /// Server (guild) IDs in this export. Local only.
+    pub fn servers(&self) -> &BTreeSet<String> {
+        &self.servers
+    }
+
     pub fn overlaps_with(&self) -> BTreeSet<u32> {
         self.overlap.keys().copied().collect()
     }
