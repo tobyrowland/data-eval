@@ -310,11 +310,11 @@
     $("report-body").innerHTML = `
       <p class="eyebrow">Send to Working Minds</p>
       <h2>Your detailed assessment report</h2>
-      <p>A full report of the measurements, written so Working Minds can review it with an AI model. Sending it opens your own email program addressed to <b>${esc(preview.email)}</b>, with the report saved in Documents › Working Minds for you to attach. You decide whether to send it.</p>
-      <div class="guide-callout"><b>What it contains</b><br>Your company name, the names of the items you added, and counts, scores and distributions: tokens, quality, duplicates, years, languages, platforms and gaps.<br><b>What it never contains</b><br>Messages, documents, email text, email addresses, people's names or file paths.</div>
+      <p>Measurements only, written so Working Minds can review them with an AI model. Sending opens your own email program addressed to <b>${esc(preview.email)}</b> and saves the report in Documents › Working Minds for you to attach.</p>
+      <div class="guide-callout"><b>Contains:</b> company name, the names of items you added, and counts, scores and distributions.<br><b>Never contains:</b> messages, documents, email text, email addresses, people's names or file paths.</div>
       <div class="report-preview-head"><span class="muted small">Preview · ${num(Math.round(preview.bytes / 1024))} KB</span></div>
       <pre class="report-preview">${esc(preview.markdown)}</pre>
-      <div class="actions-row"><button class="btn ghost" id="report-copy">Copy report</button><div><button class="btn secondary" id="report-save">Save file only</button> <button class="btn primary" id="report-send">Open email to Working Minds</button></div></div>`;
+      <div class="actions-row report-actions"><button class="btn ghost" id="report-copy">Copy report</button><div><button class="btn secondary" id="report-save">Save file only</button> <button class="btn primary" id="report-send">Open email to Working Minds</button></div></div>`;
     $("report-panel").setAttribute("aria-hidden", "false");
     $("scrim").classList.add("on");
     $("report-copy").onclick = async () => {
