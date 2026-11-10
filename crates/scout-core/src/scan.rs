@@ -49,6 +49,11 @@ pub struct TextTotals {
     pub takeout_products: std::collections::BTreeSet<String>,
     /// Git remotes of repositories in this collection, as host/owner/repo.
     pub git_remotes: std::collections::BTreeSet<String>,
+    /// Emails with a Message-ID in this collection's mailboxes.
+    pub emails_with_id: u64,
+    /// Of those, emails already seen earlier (in this or another
+    /// collection), by the collection that had them first.
+    pub email_overlap: BTreeMap<u32, u64>,
 }
 
 /// The private local result of a scan. Contains local paths and hashes and
@@ -73,6 +78,9 @@ pub struct Inventory {
     pub links_by_item: HashMap<u64, BTreeMap<&'static str, u32>>,
     /// The exclusions this assessment was made with.
     pub exclude: Vec<String>,
+    /// Hashed Message-IDs seen so far, with the collection that had each
+    /// first, so the same email in two mailboxes counts once.
+    pub mail_seen: HashMap<u64, u32>,
 }
 
 struct Ctx {
@@ -96,6 +104,7 @@ struct Scanner<'p> {
     attachments: std::collections::BTreeMap<String, Vec<u64>>,
     slack_seen: crate::analyze::slack::SeenMessages,
     links_by_item: HashMap<u64, BTreeMap<&'static str, u32>>,
+    mail_seen: HashMap<u64, u32>,
 }
 
 /// Scans the selected files and folders. Reads only what was selected.
@@ -150,6 +159,7 @@ pub fn extend_scan(
         attachments: Default::default(),
         slack_seen: Default::default(),
         links_by_item: Default::default(),
+        mail_seen: Default::default(),
     };
     if let Some(p) = prev {
         s.records_total = p.items.iter().filter_map(|i| i.records).sum();
@@ -161,6 +171,7 @@ pub fn extend_scan(
         s.attachments = p.attachments;
         s.slack_seen = p.slack_seen;
         s.links_by_item = p.links_by_item;
+        s.mail_seen = p.mail_seen;
         s.limits_reached.remove(&Reason::StoppedByUser);
     }
     for input in inputs {
@@ -216,6 +227,7 @@ pub fn extend_scan(
         slack_seen: s.slack_seen,
         links_by_item: s.links_by_item,
         exclude: s.opts.exclude.clone(),
+        mail_seen: s.mail_seen,
     }
 }
 
@@ -249,7 +261,8 @@ pub fn update_scan(
                 prev.slack[id as usize]
                     .overlaps_with()
                     .iter()
-                    .any(|o| dropped.contains(o))
+                    .chain(prev.text[id as usize].email_overlap.keys())
+                    .any(|o| *o != id && dropped.contains(o))
             })
             .collect();
         if more.is_empty() {
@@ -302,6 +315,10 @@ impl Inventory {
             c.id = n;
             s.renumber_collections(&cmap);
             t.sources.renumber_collections(&cmap);
+            t.email_overlap = std::mem::take(&mut t.email_overlap)
+                .into_iter()
+                .filter_map(|(k, v)| cmap.get(&k).map(|&n| (n, v)))
+                .collect();
             collections.push(c);
             slack.push(s);
             text.push(t);
@@ -327,6 +344,14 @@ impl Inventory {
             }
             None => false,
         });
+        let mut mail_seen = self.mail_seen;
+        mail_seen.retain(|_, c| match cmap.get(c) {
+            Some(&n) => {
+                *c = n;
+                true
+            }
+            None => false,
+        });
         Inventory {
             items,
             collections,
@@ -335,6 +360,7 @@ impl Inventory {
             attachments,
             links_by_item,
             slack_seen,
+            mail_seen,
             ..self
         }
     }
@@ -978,6 +1004,20 @@ impl Scanner<'_> {
                 ctx.collection,
                 &mut self.slack_seen,
             );
+        }
+        if !outcome.message_ids.is_empty() {
+            let t = &mut self.text[ctx.collection as usize];
+            for h in std::mem::take(&mut outcome.message_ids) {
+                t.emails_with_id += 1;
+                match self.mail_seen.entry(h) {
+                    std::collections::hash_map::Entry::Vacant(v) => {
+                        v.insert(ctx.collection);
+                    }
+                    std::collections::hash_map::Entry::Occupied(o) => {
+                        *t.email_overlap.entry(*o.get()).or_default() += 1;
+                    }
+                }
+            }
         }
         if let Some(n) = outcome.records {
             self.records_total += n;

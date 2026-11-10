@@ -55,48 +55,38 @@ not code-signed yet, so Windows shows a first-run warning.
 
 1. **The data map** comes first: a one-line summary and four key figures
    above it.
-2. **Next steps** is one ranked list:
-   - files the Slack export links to but doesn't contain
-   - other systems the data refers to
-   - sources the owner added themselves
-   - remaining preparation steps
+2. **Your platforms** shows what has been collected and what is still
+   missing, one card per platform: Slack, Email, Google Drive, GitHub,
+   GitLab, Bitbucket, and a final "Other files" card. Each card has:
+   - a status (Collected / Partly collected) and totals: items, files, size,
+     dates and messages (each message counted once)
+   - the next action where one applies, for example "6,123 shared files
+     still missing", "2 other linked repositories not added", or "added as a
+     download, no history"
+   - a table of the **items in the collection**: name, files, size, dates,
+     messages, records or emails, and **overlap** with other items, such as
+     "Duplicate of …", "88% also in …" or "40 emails also in …"
+   - for each row, *Remove* (a highlighted *Remove duplicate* when another
+     item already holds everything in it), and the item's file tree, where
+     single files and folders can be removed and put back
+   - "Linked from N other items", showing which files link to the platform
 
-   Systems are found from links in messages and documents (GitHub, Jira,
-   Google Drive, Notion, Confluence and so on), apps installed in Slack, and
-   messages from those apps' bots. Each row shows its evidence, for example
-   "507 links to 297 distinct tickets · app installed in Slack". The owner can
-   remove a suggestion, restore it, or add a source from the catalogue or
-   their own. Their edits are kept on this computer and included in the saved
-   map. Links themselves never leave the private inventory; the map carries
-   only service names and counts.
+   Platforms your data links to or mentions but you haven't collected are
+   listed under **Not collected yet**, with the evidence ("507 links to 297
+   tickets · app installed in Slack"), *How to export*, *Mark as done* and
+   *Remove*. Removing never touches files on disk, can be undone, and is
+   remembered with the session. File names and paths appear only on this
+   screen and never go into the saved map.
 
-   **Steps tick themselves off** when the source's data arrives. Working
-   Minds recognises:
-   - Google Takeout archives, by product: Drive and Mail
-   - mailboxes
-   - Git repositories, from the remote in `.git/config`, which says whether
-     a repository lives on GitHub, GitLab or Bitbucket
+   **Duplicates are never counted twice.** The headline figures count
+   files, records, messages and emails once:
+   - identical copies of files are matched by content
+   - a Slack message in two exports is matched by channel and timestamp
+   - an email in two mailboxes (for example a Takeout "All mail" and a
+     separate .mbox) is matched by Message-ID
 
-   A done step turns green and says where the data was found. For code it
-   also says how many linked pages fall inside the repositories you added.
-   Anything Working Minds can't detect can be ticked off with *Mark as done*,
-   which can be undone. A progress bar shows how many steps are done.
-   Takeout archives and repositories get readable names, such as "Google
-   Takeout · Drive, Mail · part 3-001" and "acme/core (Git repository)".
-
-   **Each step opens into its items and their files** (to-do → item →
-   files). "N items in your map" lists the things the owner added that
-   *contain* the step's data and those that *link to* it, with file counts,
-   sizes and "links in N files". *Files* opens a folder tree of the item;
-   for linking items it starts with the files that carry the links, most
-   first. The owner can **remove a whole item** (also from the "Already in
-   your map" chips) or **remove files and folders inside an item**. Both are
-   undoable (*Put back*). A step stays in the list unless the item it rests
-   on is removed. Removing never touches files on disk; it only changes the
-   assessment and the data pack. Only the affected items are read again, and
-   overlapping Slack exports are re-counted so every message still counts
-   once. Removals are remembered with the session. File names and paths are
-   shown only on this screen and never go into the saved map.
+   An item counts as a duplicate only when everything in it, emails and
+   other files alike, is also in another item.
 3. **Analysis:** collections, coverage, file formats and languages tables,
    plus activity over time.
 

@@ -429,8 +429,8 @@
         <div class="hero-top">
           <p class="hero-lead">${esc(lead)}</p>
           <div class="hero-stats">
-            <div><strong data-count="${t.logical_files}">0</strong><span>files</span></div>
-            <div><strong data-count="${t.structured_records}">0</strong><span>records and messages</span></div>
+            <div><strong data-count="${t.unique_files != null ? t.unique_files : t.logical_files}">0</strong><span>files</span>${t.exact_duplicate_files ? `<small class="dedup" title="Identical copies of files are counted once">${num(t.exact_duplicate_files)} identical copies not counted</small>` : ""}</div>
+            <div><strong data-count="${t.unique_records != null ? t.unique_records : t.structured_records}">0</strong><span>records, messages and emails</span>${t.duplicate_records ? `<small class="dedup" title="A message or email that appears in more than one item is counted once">${num(t.duplicate_records)} duplicates not counted</small>` : ""}</div>
             <div><strong>${esc(sp.value)}</strong><span>${esc(sp.note)}</span></div>
             <div><strong data-count="${pct}" data-fmt="pct">0%</strong><span>contents examined</span></div>
           </div>
@@ -444,7 +444,7 @@
 
       <section class="section reveal" style="animation-delay:250ms">
         <div class="section-head">
-          <div><h2>Next steps</h2><p>Built from what your data links to and mentions. Remove anything that isn't yours, and add sources we missed.</p></div>
+          <div><h2>Your platforms</h2><p>What you've collected from each platform, the items in it and their stats, and what your data points to that's still missing. Remove duplicates and anything that isn't yours.</p></div>
           <div class="section-actions">
             <button class="btn secondary small" data-act="addsource"><span aria-hidden="true">＋</span> Add a source</button>
           </div>
@@ -631,219 +631,213 @@
   const catalogName = (map, id) => ((map.source_catalog || []).find((s) => s.id === id) || {}).name || id;
   const displayOf = (map, label) => ((map.collections || []).find((c) => c.label === label) || {}).display_label || label;
 
-  // Steps whose items panel is open, kept across redraws.
-  const openSteps = new Set();
+  // ------------------------------------------------------------ platforms
+  // One card per platform with the items (files) collected for it, their
+  // stats and overlaps, then the platforms the data points to that aren't
+  // collected yet.
+  const PLATFORM_NAMES = { slack: "Slack", email: "Email", google_drive: "Google Drive", google_other: "Google (other products)", github: "GitHub", gitlab: "GitLab", bitbucket: "Bitbucket" };
+  const PLATFORM_ORDER = ["slack", "email", "google_drive", "google_other", "github", "gitlab", "bitbucket"];
+  // Item rows whose file tree is open, kept across redraws.
+  const openTrees = new Set();
 
   function renderNextSteps(host, map, plan, handlers, redraw, extra) {
     const removed = new Set(plan.removed);
     const doneByHand = new Set(plan.done);
     const sources = map.sources || [];
-    const items = [];
+    const cols = map.collections || [];
+    const F = handlers.files || null;
     const save = () => { handlers.onPlan(plan); redraw(); };
     const markDone = (key) => () => { if (!plan.done.includes(key)) plan.done.push(key); save(); };
     const undoDone = (key) => () => { plan.done = plan.done.filter((k) => k !== key); save(); };
-    const names = (labels) => labels.map((l) => displayOf(map, l)).join(", ");
+    const srcOf = (id) => sources.find((s) => s.id === id);
+    const colOf = (label) => cols.find((c) => c.label === label);
+    const pname = (id) => PLATFORM_NAMES[id] || catalogName(map, id);
+    const nameOf = (label) => { const c = colOf(label); return c ? c.display_label || c.label : label; };
+    const actions = []; // [label, fn, cls] referenced by data-act-i
+    const act = (label, fn, cls) => { actions.push(fn); return `<button class="btn ${cls || "secondary"} small" data-act-i="${actions.length - 1}">${esc(label)}</button>`; };
 
-    // 1. Files the Slack exports link to but don't contain: one step for
-    // all exports together, each file counted once.
-    const rels = map.relationships || [];
-    const sf = map.slack_files;
-    if (sf && sf.images + sf.documents > 0) {
-      const total = sf.images + sf.documents;
-      const got = sf.images_found + sf.documents_found;
-      const key = "slack-files";
-      const part = (found, count, noun) => (count ? (found ? `${num(found)} of ${num(count)} ${noun}` : `${num(count)} ${noun}`) : null);
-      const what = [part(sf.images_found, sf.images, "images"), part(sf.documents_found, sf.documents, "documents")].filter(Boolean).join(" and ");
-      const complete = got >= total;
-      const manual = !complete && doneByHand.has(key);
-      const several = sf.exports.length > 1;
-      const attach = [...new Set(rels.filter((r) => r.kind === "slack_images" || r.kind === "slack_files").flatMap((r) => r.found_in || []))];
-      items.push({
-        groups: [{ role: "contains", labels: [...new Set([...sf.exports, ...attach])] }],
-        key, done: complete || manual, manual,
-        title: complete ? "Files shared in Slack: all in your map" : manual ? "Files shared in Slack: marked as done" : "Get the files shared in Slack",
-        tag: "Slack",
-        evidence: got ? `${what} matched to messages` + (complete ? "" : `; ${num(total - got)} still missing`) : `${what} are linked from messages but not in the export${several ? "s" : ""}`,
-        note: manual ? "You marked this as done. Files that could not be downloaded stay listed as missing on the map."
-          : several ? `Across your ${sf.exports.length} Slack exports, each file counted once. Running the Attachment Downloader on the export that covers the longest period usually gets them all.` : null,
-        from: sf.exports, stat: complete ? total : total - got, statNoun: complete ? "files matched" : "files missing",
-        progress: total ? Math.round((got * 100) / total) : 0,
-        actions: complete ? [] : manual ? [["Undo", undoDone(key), "ghost"]] : [["How to get these", () => handlers.onGuide("slack_images")], ["Mark as done", markDone(key), "ghost"]],
-      });
-    }
+    // Platforms with data in the map.
+    const byPlat = new Map();
+    cols.forEach((c) => (c.platforms || []).forEach((p) => { if (!byPlat.has(p)) byPlat.set(p, []); byPlat.get(p).push(c); }));
+    const rank = (p) => { const i = PLATFORM_ORDER.indexOf(p); return i < 0 ? 99 : i; };
+    const collected = [...byPlat.keys()].sort((a, b) => rank(a) - rank(b) || pname(a).localeCompare(pname(b)));
+    const loose = cols.filter((c) => !(c.platforms || []).length);
 
-    // 2. Sources the data refers to: open until their data is in the map.
-    const shown = new Set();
-    const addedIds = new Set(plan.added.map((a) => a.id).filter(Boolean));
-    // Ordered by how much the data points to each source, whether or not it
-    // is done, so ticking a step off doesn't move it.
+    // Platforms the data points to that aren't collected.
     const weight = (s) => (s.distinct_targets || 0) * 3 + (s.links || 0) + (s.bot_messages || 0) / 2;
-    sources.slice().sort((a, b) => weight(b) - weight(a)).forEach((s) => {
-      const evidenced = s.links || s.app_installed || s.bot_messages;
-      if (removed.has(s.id) && !s.in_selection) return;
-      if (s.in_selection && !evidenced && !addedIds.has(s.id)) return; // a base source like Slack itself
-      shown.add(s.id);
-      const linkLine = s.links ? `${num(s.links)} ${s.links === 1 ? "link" : "links"} to ${num(s.distinct_targets)} distinct ${s.target_noun} in your data` : s.evidence;
-      if (s.in_selection) {
-        // Display names already say what each collection is (e.g. "Google Takeout · Drive").
-        const found = `Found in ${names(s.collections)}`;
-        let note = null;
-        if (s.resolved_targets != null && s.distinct_targets) {
-          const others = s.other_repositories || 0;
-          note = s.resolved_targets >= s.distinct_targets
-            ? `All ${num(s.distinct_targets)} linked ${s.target_noun} are in the repositories you added.`
-            : `${num(s.resolved_targets)} of ${num(s.distinct_targets)} linked ${s.target_noun} are in the repositories you added` +
-              (others ? `; the rest point to ${num(others)} other ${others === 1 ? "repository" : "repositories"} that aren't in your map yet.` : ".");
-          if (s.snapshot_only) note += " It was added as a download, so it has no commit history or pull requests; a clone (git clone) includes the history.";
-        } else if (s.id === "google_drive" && s.links) {
-          note = "Takeout names files by title rather than by the IDs in links, so we can't check which linked documents it includes.";
-        }
-        items.push({ groups: [{ role: "contains", labels: s.collections, service: s.id }, { role: "links", labels: (s.referenced_from || []).filter((l) => !s.collections.includes(l)), service: s.id }],
-          key: s.id, done: true, title: `${s.name}: in your map`, tag: s.category, evidence: found, sub: s.links ? linkLine : null, note,
-          stat: s.links || null, statNoun: s.links === 1 ? "link" : "links", from: [], actions: [] });
-        return;
-      }
-      const manual = doneByHand.has(s.id);
-      items.push({
-        groups: [{ role: "links", labels: s.referenced_from || [], service: s.id }],
-        key: s.id, done: manual, manual,
-        title: manual ? `${s.name}: marked as done` : `Add your ${s.name} data`, tag: s.category,
-        evidence: s.evidence, from: s.referenced_from,
-        note: manual ? "You marked this as done. Add the export to your map to see what it contains." : null,
-        stat: s.links || s.bot_messages, statNoun: s.links ? (s.links === 1 ? "link" : "links") : "bot messages",
-        actions: manual ? [["Undo", undoDone(s.id), "ghost"]]
-          : [["How to export", () => handlers.onGuide("export:" + s.id)], ["Mark as done", markDone(s.id), "ghost"], ["Remove", () => { plan.removed.push(s.id); save(); }, "ghost"]],
-      });
-    });
-
-    // 3. Sources the owner added.
+    const todos = sources
+      .filter((s) => !byPlat.has(s.id) && !s.in_selection && !removed.has(s.id) && (s.links || s.app_installed || s.bot_messages))
+      .sort((a, b) => weight(b) - weight(a))
+      .map((s) => ({ key: s.id, name: s.name, tag: s.category, evidence: s.evidence, from: s.referenced_from || [], service: s.id, stat: s.links || s.bot_messages, statNoun: s.links ? (s.links === 1 ? "link" : "links") : "bot messages", remove: () => { plan.removed.push(s.id); save(); } }));
     plan.added.forEach((a, idx) => {
       const id = a.id || null;
-      if (id && shown.has(id)) return;
-      const key = id || "custom:" + a.custom;
-      const name = id ? catalogName(map, id) : a.custom;
-      const manual = doneByHand.has(key);
-      items.push({
-        key, done: manual, manual, title: manual ? `${name}: marked as done` : `Add your ${name} data`, tag: "Added by you",
-        evidence: id ? "No links to it found in your data yet" : "A source you added", from: [], stat: null,
-        actions: manual ? [["Undo", undoDone(key), "ghost"]]
-          : [["How to export", () => handlers.onGuide("export:" + (id || "custom"))], ["Mark as done", markDone(key), "ghost"], ["Remove", () => { plan.added.splice(idx, 1); save(); }, "ghost"]],
-      });
+      if (id && (byPlat.has(id) || todos.some((t) => t.key === id))) return;
+      todos.push({ key: id || "custom:" + a.custom, name: id ? catalogName(map, id) : a.custom, tag: "Added by you", evidence: id ? "No links to it found in your data yet" : "A source you added", from: [], guide: id || "custom", remove: () => { plan.added.splice(idx, 1); save(); } });
     });
+    const doneTodos = todos.filter((t) => doneByHand.has(t.key)).length;
+    const total = collected.length + todos.length;
+    const doneCount = collected.length + doneTodos;
+    const pctDone = total ? Math.round((doneCount * 100) / total) : 100;
 
-    // Code behind pull requests, unless a code host already has a step.
-    const codeShown = items.some((i) => ["github", "gitlab", "bitbucket"].includes(i.key));
-    rels.filter((r) => r.kind === "code_reviews" && !codeShown).forEach((r) => {
-      const key = "code:" + r.from, manual = doneByHand.has(key);
-      items.push({ groups: [{ role: "links", labels: [r.from] }], key, done: manual, manual, title: manual ? "Code behind pull requests: marked as done" : "Add the code behind linked pull requests", tag: "Code",
-        evidence: r.explanation, from: [r.from], stat: r.count, statNoun: "pull requests",
-        actions: manual ? [["Undo", undoDone(key), "ghost"]] : [["How to get these", () => handlers.onGuide("code_reviews")], ["Mark as done", markDone(key), "ghost"]] });
-    });
-
-    const covered = /^(Add the original attachments|If you hold the repositories)/;
-    const other = (map.preparation_priorities || []).filter((p) => !covered.test(p));
-    const open = items.filter((i) => !i.done);
-    const done = items.filter((i) => i.done);
-    const total = items.length;
-    const pctDone = total ? Math.round((done.length * 100) / total) : 100;
-
-    const row = (it, n) => `<div class="step ${it.done ? "done" : ""}" data-key="${esc(it.key)}">
-        <div class="step-num">${it.done ? "✓" : n}</div>
-        <div class="step-main">
-          <div class="step-title">${esc(it.title)} <span class="step-tag">${esc(it.tag)}</span>${it.manual ? ` <span class="step-tag by-you">by you</span>` : ""}</div>
-          <div class="step-evidence">${esc(it.evidence)}</div>
-          ${it.sub ? `<div class="step-from">${esc(it.sub)}</div>` : ""}
-          ${it.from && it.from.length ? `<div class="step-from">Referenced in ${esc(names(it.from))}</div>` : ""}
-          ${it.note ? `<div class="step-note">${esc(it.note)}</div>` : ""}
-          ${it.progress != null && !it.done && it.progress > 0 ? `<div class="step-progress"><span style="width:${it.progress}%"></span></div>` : ""}
-          ${itemToggle(it)}
-        </div>
-        ${it.stat ? `<div class="step-stat"><strong>${num(it.stat)}</strong><span>${esc(it.statNoun)}</span></div>` : `<div></div>`}
-        <div class="step-actions">${it.actions.map((a, k) => `<button class="btn ${a[2] || "secondary"} small" data-step="${esc(it.key)}" data-k="${k}">${esc(a[0])}</button>`).join("")}</div>
-        ${openSteps.has(it.key) ? itemPanel(it) : ""}
-      </div>`;
-    const colOf = (label) => (map.collections || []).find((c) => c.label === label);
-    const itemLabels = (it) => [...new Set((it.groups || []).flatMap((g) => g.labels || []))].filter(colOf);
-    function itemToggle(it) {
-      const n = itemLabels(it).length;
-      const open = openSteps.has(it.key);
-      return `<button class="items-toggle" data-toggle="${esc(it.key)}" aria-expanded="${open}">${open ? "▾" : "▸"} ${n ? `${num(n)} ${n === 1 ? "item" : "items"} in your map` : "No items in your map yet"}</button>`;
-    }
-    function itemPanel(it) {
-      const groups = (it.groups || []).map((g) => ({ ...g, labels: (g.labels || []).filter(colOf) })).filter((g) => g.labels.length);
-      if (!groups.length) {
-        return `<div class="step-panel"><p class="muted small">Nothing in your map belongs to this step yet. Add its export with “Add data” and it will show here.</p></div>`;
+    // ---- item table (the files in a collection)
+    function overlapBadge(c) {
+      if (c.obsolete_given) return `<span class="ov dup" title="Everything in it is also in ${esc(nameOf(c.obsolete_given))}">Duplicate of ${esc(trunc(nameOf(c.obsolete_given), 34))}</span>`;
+      const ovs = c.overlaps || [];
+      const noun = (c.slack || []).length ? "messages" : "emails";
+      const o = ovs.find((x) => x.share_percent >= 1);
+      if (o) {
+        const what = o.shared_messages ? `${num(o.shared_messages)} ${noun}` : `${num(o.identical_files)} identical files`;
+        return `<span class="ov part" title="${esc(what)} also in ${esc(nameOf(o.with))}">${Math.round(o.share_percent)}% also in ${esc(trunc(nameOf(o.with), 28))}</span>`;
       }
-      const head = { contains: "Contains this data", links: "Links to it" };
-      return `<div class="step-panel">${groups.map((g) => `<div class="si-group"><div class="si-head">${head[g.role]}</div>${g.labels.map((l) => itemRow(l, g)).join("")}</div>`).join("")}</div>`;
+      const m = ovs.find((x) => x.shared_messages > 0);
+      if (m) return `<span class="ov part" title="The rest of this item is not elsewhere">${num(m.shared_messages)} ${noun} also in ${esc(trunc(nameOf(m.with), 26))}</span>`;
+      return `<span class="ov uniq">Unique</span>`;
     }
-    function itemRow(label, g) {
-      const c = colOf(label);
-      const info = kindInfo(c);
-      const linkFiles = g.service ? ((extra.linkCounts || {})[label] || {})[g.service] : 0;
-      const left = (c.by_status && c.by_status.excluded) || 0;
-      const meta = [`${num(c.logical_files)} ${c.logical_files === 1 ? "file" : "files"}`, bytes(c.expanded_bytes)];
-      if (linkFiles) meta.push(`links in ${num(linkFiles)} ${linkFiles === 1 ? "file" : "files"}`);
-      if (left) meta.push(`${num(left)} left out`);
-      return `<div class="si-item" data-label="${esc(label)}" data-service="${esc(g.role === "links" ? g.service || "" : "")}">
-        <div class="si-line">
-          <span class="tbl-badge" style="background:${info.color}">${esc(info.badge)}</span>
-          <span class="si-name"><b title="${esc(label)}">${esc(trunc(c.display_label || c.label, 60))}</b><span class="si-meta">${esc(info.kind)} · ${meta.map(esc).join(" · ")}</span></span>
-          <span class="si-actions"><button class="btn ghost small" data-files>Files ▸</button><button class="btn ghost small danger" data-remove-item title="Takes it out of this assessment and the data pack. Your file is not deleted.">Remove item</button></span>
+    function recordsOf(c) {
+      const s = sumSlack(c);
+      if ((c.slack || []).length) return `${num(s.message_records)} messages`;
+      const mail = (c.formats || []).filter((f) => f.category === "Email").length;
+      if (!c.structured_records) return "—";
+      return `${num(c.structured_records)} ${mail && (c.formats || []).length === mail ? "emails" : "records"}`;
+    }
+    function itemTable(list, service) {
+      const rows = list.map((c) => {
+        const info = kindInfo(c);
+        const key = `${service || "other"}|${c.label}`;
+        const open = openTrees.has(key);
+        const left = (c.by_status && c.by_status.excluded) || 0;
+        return `<tr class="it-row ${c.obsolete_given ? "is-dup" : ""}" data-key="${esc(key)}" data-label="${esc(c.label)}">
+            <td><button class="it-name" data-tree aria-expanded="${open}" title="${esc(c.label)}"><span class="it-twist">${open ? "▾" : "▸"}</span><span class="tbl-badge" style="background:${info.color}">${esc(info.badge)}</span><span class="it-text"><b>${esc(c.display_label || c.label)}</b><small>${esc(info.kind)}${c.display_label && c.display_label !== c.label ? ` · ${esc(c.label)}` : ""}</small></span></button></td>
+            <td class="num">${num(c.logical_files)}${left ? `<small class="muted"> (${num(left)} left out)</small>` : ""}</td>
+            <td class="num">${bytes(c.expanded_bytes)}</td>
+            <td>${c.date_coverage ? `${esc(c.date_coverage.first)} → ${esc(c.date_coverage.last)}` : `<span class="muted">—</span>`}</td>
+            <td class="num">${recordsOf(c)}</td>
+            <td>${overlapBadge(c)}</td>
+            <td class="num">${F ? `<button class="btn ${c.obsolete_given ? "danger-solid" : "ghost danger"} small" data-remove-item title="Takes it out of this assessment and the data pack. Your file is not deleted.">${c.obsolete_given ? "Remove duplicate" : "Remove"}</button>` : ""}</td>
+          </tr>
+          ${open ? `<tr class="tree-row"><td colspan="7"><div class="si-tree" data-tree-for="${esc(c.label)}"></div></td></tr>` : ""}`;
+      }).join("");
+      return `<div class="tbl-wrap"><table class="tbl items-tbl">
+        <thead><tr><th>Item</th><th class="num">Files</th><th class="num">Size</th><th>Dates</th><th class="num">Content</th><th>Overlap</th><th></th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
+    }
+    // Items that only link to a platform, with how many of their files do.
+    function linkedFrom(labels, service, summaryText) {
+      const list = labels.filter(colOf);
+      if (!list.length) return "";
+      return `<details class="pc-links"><summary>${esc(summaryText)}</summary>
+        ${list.map((l) => {
+          const n = ((extra.linkCounts || {})[l] || {})[service] || 0;
+          return `<div class="lf-row" data-label="${esc(l)}" data-service="${esc(service)}"><span><b>${esc(trunc(nameOf(l), 60))}</b>${n ? ` <span class="muted">· links in ${num(n)} ${n === 1 ? "file" : "files"}</span>` : ""}</span>
+            ${F ? `<button class="btn ghost small" data-linking>Show files ▸</button>` : ""}<div class="si-tree" hidden></div></div>`;
+        }).join("")}</details>`;
+    }
+
+    // ---- platform cards
+    function platformCard(p) {
+      const list = byPlat.get(p);
+      const s = srcOf(p);
+      const files = list.reduce((a, c) => a + c.logical_files, 0);
+      const size = list.reduce((a, c) => a + c.expanded_bytes, 0);
+      const firsts = list.map((c) => c.date_coverage && c.date_coverage.first).filter(Boolean).sort();
+      const lasts = list.map((c) => c.date_coverage && c.date_coverage.last).filter(Boolean).sort();
+      const dups = list.filter((c) => c.obsolete_given).length;
+      const facts = [`${num(list.length)} ${list.length === 1 ? "item" : "items"}`, `${num(files)} files`, bytes(size)];
+      if (firsts.length) facts.push(`${firsts[0]} → ${lasts[lasts.length - 1]}`);
+      if (p === "slack") { const m = Object.values(map.activity || {}).reduce((a, b) => a + b, 0); if (m) facts.push(`${num(m)} messages, each counted once`); }
+      const notes = [];
+      let partial = false;
+      if (p === "slack" && map.slack_files) {
+        const sf = map.slack_files, totalF = sf.images + sf.documents, got = sf.images_found + sf.documents_found;
+        if (totalF && got < totalF) {
+          const manual = doneByHand.has("slack-files");
+          partial = !manual;
+          notes.push(`<div class="pc-note ${manual ? "" : "warn"}"><span>${manual ? "You marked the shared files as done." : `<b>${num(totalF - got)} shared files still missing</b> · ${num(got)} of ${num(totalF)} matched to messages`}</span>
+            <span class="pc-note-act">${manual ? act("Undo", undoDone("slack-files"), "ghost") : act("How to get these", () => handlers.onGuide("slack_images")) + act("Mark as done", markDone("slack-files"), "ghost")}</span></div>`);
+        } else if (totalF) notes.push(`<div class="pc-note ok">All ${num(totalF)} shared files are in your map.</div>`);
+      }
+      if (s && s.resolved_targets != null && s.distinct_targets) {
+        const others = s.other_repositories || 0;
+        if (others) { partial = true; notes.push(`<div class="pc-note warn"><span><b>${num(others)} other linked ${others === 1 ? "repository" : "repositories"} not added</b> · ${num(s.resolved_targets)} of ${num(s.distinct_targets)} linked pages are in what you added</span><span class="pc-note-act">${act("How to export", () => handlers.onGuide("export:" + p))}</span></div>`); }
+        if (s.snapshot_only) notes.push(`<div class="pc-note"><span>Added as a download, so there is no commit history or pull requests. A clone (git clone) includes them.</span></div>`);
+      }
+      if (dups) notes.push(`<div class="pc-note warn"><span><b>${num(dups)} ${dups === 1 ? "item looks" : "items look"} like a duplicate</b> of another item. Removing ${dups === 1 ? "it" : "them"} loses nothing.</span></div>`);
+      const own = new Set(list.map((c) => c.label));
+      const linkers = s ? (s.referenced_from || []).filter((l) => !own.has(l)) : [];
+      const linkText = s && s.links ? `Linked from ${num(linkers.length)} other ${linkers.length === 1 ? "item" : "items"} · ${num(s.links)} links` : "";
+      return `<div class="pcard">
+        <div class="pc-head">
+          <div class="pc-title"><h3>${esc(pname(p))}</h3><span class="pill ${partial ? "partial" : "ok"}">${partial ? "Partly collected" : "Collected ✓"}</span></div>
+          <div class="pc-facts">${facts.map(esc).join(" · ")}</div>
         </div>
-        <div class="si-tree" hidden></div>
+        ${notes.join("")}
+        ${itemTable(list, p)}
+        ${linkText ? linkedFrom(linkers, p, linkText) : ""}
       </div>`;
     }
-    const removedItems = plan.removed.map((id) => sources.find((s) => s.id === id)).filter((s) => s && !s.in_selection);
+    function todoRow(t) {
+      const manual = doneByHand.has(t.key);
+      return `<div class="todo ${manual ? "done" : ""}">
+        <div class="todo-main">
+          <div class="todo-title">${manual ? "✓ " : ""}${esc(t.name)} <span class="step-tag">${esc(t.tag)}</span>${manual ? ` <span class="step-tag by-you">marked done</span>` : ""}</div>
+          <div class="todo-ev">${esc(t.evidence)}</div>
+          ${t.service && t.from.length ? linkedFrom(t.from, t.service, `Linked from ${t.from.length === 1 ? "1 item" : `${num(t.from.length)} items`} · show which files`) : ""}
+        </div>
+        ${t.stat ? `<div class="step-stat"><strong>${num(t.stat)}</strong><span>${esc(t.statNoun)}</span></div>` : "<div></div>"}
+        <div class="step-actions">${manual ? act("Undo", undoDone(t.key), "ghost") : act("How to export", () => handlers.onGuide("export:" + (t.guide || t.key))) + act("Mark as done", markDone(t.key), "ghost") + act("Remove", t.remove, "ghost")}</div>
+      </div>`;
+    }
+
+    const removedSources = plan.removed.map((id) => sources.find((s) => s.id === id)).filter((s) => s && !s.in_selection);
+    const other = (map.preparation_priorities || []).filter((p) => !/^(Add the original attachments|If you hold the repositories)/.test(p));
     host.innerHTML = `
-      <div class="in-map"><span class="muted">Already in your map</span>${map.collections.map((c) => `<span class="chip" title="${esc(c.label)}"><i style="background:${kindInfo(c).color}"></i>${esc(trunc(c.display_label || c.label, 40))}<button class="chip-x" data-chip-remove="${esc(c.label)}" aria-label="Remove ${esc(c.display_label || c.label)} from this assessment" title="Remove from this assessment">×</button></span>`).join("")}</div>
-      <div class="card steps-card">
-        ${total ? `<div class="steps-progress ${open.length ? "" : "all"}">
-          <div class="sp-text"><strong>${num(done.length)} of ${num(total)} done</strong><span>${open.length ? `${num(open.length)} still to add` : "Everything your data points to is accounted for"}</span></div>
-          <div class="sp-bar"><span style="width:${pctDone}%"></span></div>
-        </div>` : ""}
-        ${items.map((it, i) => row(it, i + 1)).join("")}
-        ${!total ? `<div class="step empty"><div class="step-main"><div class="step-title">Nothing obvious to add</div><div class="step-evidence">Your data doesn't link to other systems we recognise. Use “Add a source” for anything we missed.</div></div></div>` : ""}
-        ${other.length ? `<div class="step-other"><b>Also worth doing</b><ul>${other.map((o) => `<li>${esc(o)}</li>`).join("")}</ul></div>` : ""}
-      </div>
-      ${removedItems.length ? `<div class="removed-line">${num(removedItems.length)} removed: ${removedItems.map((s) => `<button class="link-btn" data-restore="${esc(s.id)}">${esc(s.name)} ↺</button>`).join(" ")}</div>` : ""}
+      ${total ? `<div class="steps-progress card ${doneCount < total ? "" : "all"}">
+        <div class="sp-text"><strong>${num(collected.length)} of ${num(total)} platforms collected</strong><span>${todos.length - doneTodos ? `${num(todos.length - doneTodos)} more your data points to` : "Everything your data points to is accounted for"}</span></div>
+        <div class="sp-bar"><span style="width:${pctDone}%"></span></div>
+      </div>` : ""}
+      ${collected.map(platformCard).join("")}
+      ${loose.length ? `<div class="pcard"><div class="pc-head"><div class="pc-title"><h3>Other files</h3></div><div class="pc-facts">${num(loose.length)} ${loose.length === 1 ? "item" : "items"} not tied to a platform</div></div>${itemTable(loose, null)}</div>` : ""}
+      ${todos.length ? `<div class="card todo-card"><div class="todo-head"><h3>Not collected yet</h3><p>Platforms your data links to or mentions. Add their exports, or remove any that aren't yours.</p></div>${todos.map(todoRow).join("")}</div>` : ""}
+      ${other.length ? `<div class="step-other card"><b>Also worth doing</b><ul>${other.map((o) => `<li>${esc(o)}</li>`).join("")}</ul></div>` : ""}
+      ${removedSources.length ? `<div class="removed-line">${num(removedSources.length)} removed: ${removedSources.map((s) => `<button class="link-btn" data-restore="${esc(s.id)}">${esc(s.name)} ↺</button>`).join(" ")}</div>` : ""}
       ${(extra.removedItems || []).length ? `<div class="removed-line">Taken out of this assessment: ${extra.removedItems.map((r) => `<button class="link-btn" data-restore-item="${esc(r.path)}" title="Put back">${esc(r.name)} ↺</button>`).join(" ")}</div>` : ""}`;
-    host.querySelectorAll("[data-step]").forEach((b) => {
-      const it = items.find((x) => x.key === b.dataset.step);
-      b.onclick = () => it.actions[+b.dataset.k][1]();
-    });
-    host.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = () => {
-      plan.removed = plan.removed.filter((id) => id !== b.dataset.restore);
-      save();
-    }));
-    host.querySelectorAll("[data-toggle]").forEach((b) => (b.onclick = () => {
-      const k = b.dataset.toggle;
-      if (openSteps.has(k)) openSteps.delete(k); else openSteps.add(k);
+
+    host.querySelectorAll("[data-act-i]").forEach((b) => (b.onclick = () => actions[+b.dataset.actI]()));
+    host.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = () => { plan.removed = plan.removed.filter((id) => id !== b.dataset.restore); save(); }));
+    host.querySelectorAll("[data-tree]").forEach((b) => (b.onclick = () => {
+      const k = b.closest("tr").dataset.key;
+      if (openTrees.has(k)) openTrees.delete(k); else openTrees.add(k);
       redraw();
     }));
-    const F = handlers.files;
     if (!F) return;
-    const nameOf = (label) => { const c = colOf(label); return c ? c.display_label || c.label : label; };
-    host.querySelectorAll("[data-chip-remove]").forEach((b) => confirmClick(b, "Remove?", () => F.removeItem(b.dataset.chipRemove, nameOf(b.dataset.chipRemove))));
     host.querySelectorAll("[data-restore-item]").forEach((b) => (b.onclick = () => F.restoreItem(b.dataset.restoreItem, b.textContent.replace(" ↺", ""))));
-    host.querySelectorAll(".si-item").forEach((row) => {
+    host.querySelectorAll(".it-row").forEach((row) => {
       const label = row.dataset.label;
-      const service = row.dataset.service || null;
-      confirmClick(row.querySelector("[data-remove-item]"), "Confirm: remove item", () => F.removeItem(label, nameOf(label)));
+      confirmClick(row.querySelector("[data-remove-item]"), "Confirm remove", () => F.removeItem(label, nameOf(label)));
+    });
+    host.querySelectorAll("[data-tree-for]").forEach((el) => mountTree(el, el.dataset.treeFor, null, false));
+    host.querySelectorAll(".lf-row").forEach((row) => {
+      const btn = row.querySelector("[data-linking]");
       const tree = row.querySelector(".si-tree");
-      const btn = row.querySelector("[data-files]");
-      btn.onclick = async () => {
-        if (!tree.hidden) { tree.hidden = true; btn.textContent = "Files ▸"; return; }
-        tree.hidden = false; btn.textContent = "Files ▾";
-        if (service) await showLinking(); else await showTree();
+      btn.onclick = () => {
+        if (!tree.hidden) { tree.hidden = true; btn.textContent = "Show files ▸"; return; }
+        tree.hidden = false; btn.textContent = "Hide files ▾";
+        mountTree(tree, row.dataset.label, row.dataset.service, true);
       };
+    });
+
+    // ---- file tree inside an item
+    function mountTree(tree, label, service, linkingFirst) {
+      const show = linkingFirst && service ? showLinking : showTree;
+      show();
       async function showTree() {
         tree.innerHTML = `<div class="muted small">Loading…</div>`;
         try {
           const entries = await F.list(label, null, service);
-          tree.innerHTML = (service ? `<div class="ft-switch"><button class="link-btn" data-linking>Show only files with links</button></div>` : "") + `<ul class="ft">${entries.map(entryRow).join("")}</ul>`;
+          tree.innerHTML = (service ? `<div class="ft-switch"><span class="muted small">All files</span><button class="link-btn" data-linking-only>Show only files with links</button></div>` : "") +
+            `<ul class="ft">${entries.length ? entries.map((e) => entryRow(e)).join("") : `<li class="muted small">No files.</li>`}</ul>`;
           bindTree(tree);
-          const sw = tree.querySelector("[data-linking]");
+          const sw = tree.querySelector("[data-linking-only]");
           if (sw) sw.onclick = showLinking;
         } catch (e) { tree.innerHTML = `<div class="muted small">Could not list files: ${esc(String(e))}</div>`; }
       }
@@ -851,7 +845,7 @@
         tree.innerHTML = `<div class="muted small">Loading…</div>`;
         try {
           const entries = await F.linking(label, service);
-          const svc = catalogName(map, service);
+          const svc = pname(service);
           tree.innerHTML = `<div class="ft-switch"><span class="muted small">Files with links to ${esc(svc)}, most first</span><button class="link-btn" data-all>Show all files</button></div>
             <ul class="ft">${entries.length ? entries.map((e) => entryRow(e, true)).join("") : `<li class="muted small">None of its files link to ${esc(svc)}.</li>`}</ul>`;
           bindTree(tree);
@@ -874,7 +868,7 @@
         </li>`;
       }
       function bindTree(el) {
-        el.querySelectorAll(":scope .ft-twist:not([data-bound])").forEach((t) => {
+        el.querySelectorAll(".ft-twist:not([data-bound])").forEach((t) => {
           t.dataset.bound = "1";
           t.onclick = async () => {
             const li = t.closest(".ft-row");
@@ -899,7 +893,7 @@
           b.onclick = () => F.restore(b.dataset.restorePath, b.dataset.restorePath.split("/").pop());
         });
       }
-    });
+    }
   }
 
   /** Two-step button: the first click asks, the second acts. */
