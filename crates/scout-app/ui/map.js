@@ -284,6 +284,11 @@
         <div id="next-steps"></div>
       </section>
 
+      <section class="section reveal" style="animation-delay:330ms">
+        <div class="section-head"><div><h2>Training value</h2><p>How much of your data is useful for training AI models, measured document by document on this computer.</p></div></div>
+        <div id="training-value"></div>
+      </section>
+
       <section class="section reveal" style="animation-delay:400ms">
         <div class="section-head"><div><h2>Analysis</h2><p>What is in the data you added, measured on this computer. Every file is counted, including those we can't read yet.</p></div></div>
         ${collectionsTable()}
@@ -471,6 +476,8 @@
     root.querySelectorAll('[data-act="adddata"]').forEach((b) => (b.onclick = () => handlers.onAddData(b)));
     const steps = root.querySelector("#next-steps");
     const redraw = () => renderNextSteps(steps, map, plan, handlers, redraw, extra || {});
+    const tvHost = root.querySelector("#training-value");
+    renderTraining(tvHost, map, extra.evaluation || null, handlers, extra.evaluating || null);
     root.querySelector('[data-act="addsource"]').onclick = (e) => openSourcePicker(e.currentTarget, map, plan, () => { handlers.onPlan(plan); redraw(); });
     redraw();
   }
@@ -814,6 +821,123 @@
     }
   }
 
+  // ------------------------------------------------------------ training value
+  const compact = (n) => {
+    n = n || 0;
+    if (n >= 1e9) return (n / 1e9).toFixed(n >= 1e10 ? 0 : 1).replace(/\.0$/, "") + "B";
+    if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, "") + "K";
+    return num(n);
+  };
+  const KIND_COLOR = { conversation: "#6D5BD0", email: "#C4577A", document: "#2F6FB0", code: "#5E6E84", structured: "#B7C2CF", machine: "#DDE3EA" };
+
+  /** Rough time for the evaluation, from the size of the readable content. */
+  function evaluationEstimate(map) {
+    let bytes = 0;
+    (map.collections || []).forEach((c) => (c.formats || []).forEach((f) => {
+      if (["Documents", "Email", "Structured data", "Tables"].includes(f.category) && !["PDF", "Office document", "OpenDocument file"].includes(f.format)) bytes += f.bytes;
+    }));
+    const secs = bytes / 40e6 + 5; // about 40 MB/s on a typical laptop
+    if (secs < 60) return "under a minute";
+    if (secs < 180) return "a minute or two";
+    return `about ${Math.round(secs / 60)} minutes`;
+  }
+
+  function renderTraining(host, map, ev, handlers, state) {
+    // The platform a row belongs to: email rows under Email, documents
+    // under the item's document platform, chat under its chat platform.
+    const platformOf = (label, kind) => {
+      const c = (map.collections || []).find((x) => x.label === label);
+      const ps = (c && c.platforms) || [];
+      const pick = kind === "email" && ps.includes("email") ? "email"
+        : ps.find((p) => p !== "email") || ps[0];
+      return pick ? PLATFORM_NAMES[pick] || catalogName(map, pick) : "Other files";
+    };
+    const nameOf = (label) => { const c = (map.collections || []).find((x) => x.label === label); return c ? c.display_label || c.label : label; };
+    if (state && state.running) {
+      const p = state.progress || {};
+      host.innerHTML = `<div class="card tv-card tv-running">
+        <div class="adding-ring" aria-hidden="true"></div>
+        <div class="tv-run-text"><b>Evaluating training value…</b>
+          <span>${num(p.documents || 0)} documents measured · ${bytes(p.bytes_read || 0)} read${p.collection ? ` · reading ${esc(trunc(nameOf(p.collection) || p.collection, 40))}` : ""}</span>
+          <small class="muted">Everything stays on this computer. You can keep using the map.</small></div>
+        <button class="btn ghost small" data-tv="stop">Stop</button></div>`;
+      host.querySelector('[data-tv="stop"]').onclick = (e) => { e.currentTarget.disabled = true; e.currentTarget.textContent = "Stopping…"; handlers.onStopEvaluate && handlers.onStopEvaluate(); };
+      return;
+    }
+    if (!ev) {
+      host.innerHTML = `<div class="card tv-card tv-intro">
+        <div><b>How much of this is useful for training AI models?</b>
+          <p>Working Minds reads every message, email and document in full, on this computer, and measures how much is written by people, how good the text is, how much is duplicated and how much predates AI-written text. It takes ${esc(evaluationEstimate(map))} for your data.</p></div>
+        <button class="btn primary" data-tv="run">Evaluate training value</button></div>`;
+      host.querySelector('[data-tv="run"]').onclick = () => handlers.onEvaluate && handlers.onEvaluate();
+      return;
+    }
+    const t = ev.totals;
+    const pct = (a, b) => (b ? Math.round((a * 100) / b) : 0);
+    const rating = { high: "High", medium: "Medium", low: "Low" }[ev.rating] || ev.rating;
+    // Rows grouped by platform, biggest usable first.
+    const groups = new Map();
+    (ev.rows || []).forEach((r) => { const p = platformOf(r.collection, r.kind); if (!groups.has(p)) groups.set(p, []); groups.get(p).push(r); });
+    const order = [...groups.entries()].sort((a, b) => b[1].reduce((x, r) => x + r.usable_tokens, 0) - a[1].reduce((x, r) => x + r.usable_tokens, 0));
+    const dots = (n) => `<span class="tv-dots v${n}" title="${["", "Low", "Medium", "High"][n]} value">${"●".repeat(n)}${"○".repeat(3 - n)}</span>`;
+    const years = (r) => (r.first_year ? (r.first_year === r.last_year ? `${r.first_year}` : `${r.first_year}–${r.last_year}`) : "—");
+    const rows = order.map(([p, list]) => {
+      const usable = list.reduce((x, r) => x + r.usable_tokens, 0);
+      return `<tr class="tv-group"><td colspan="7"><b>${esc(p)}</b><span class="muted"> · ${compact(usable)} usable tokens</span></td></tr>` +
+        list.map((r) => `<tr>
+          <td><div class="tv-name"><span><span class="tv-kind" style="background:${KIND_COLOR[r.kind] || "#B7C2CF"}"></span>${esc(r.kind_label)}</span><small class="muted">${esc(trunc(nameOf(r.collection), 46))}</small></div></td>
+          <td class="num">${num(r.documents)}</td>
+          <td class="num">${compact(r.tokens)}</td>
+          <td class="num"><b>${compact(r.usable_tokens)}</b></td>
+          <td>${esc(years(r))}</td>
+          <td>${dots(r.value_band)}</td>
+          <td class="tv-why">${esc(r.reason)}</td></tr>`).join("");
+    }).join("");
+    // Usable tokens by kind.
+    const byKind = new Map();
+    (ev.rows || []).forEach((r) => byKind.set(r.kind, { label: r.kind_label, v: (byKind.get(r.kind) || { v: 0 }).v + r.usable_tokens }));
+    const kinds = [...byKind.entries()].filter(([, k]) => k.v > 0).sort((a, b) => b[1].v - a[1].v);
+    const maxK = Math.max(1, ...kinds.map(([, k]) => k.v));
+    const bars = kinds.map(([kind, k]) => `<div class="tv-bar"><span class="tv-bar-label">${esc(k.label)}</span><span class="tv-bar-track"><span style="width:${(k.v * 100) / maxK}%;background:${KIND_COLOR[kind]}"></span></span><span class="tv-bar-val">${compact(k.v)}</span></div>`).join("");
+    // What would raise the value.
+    const tips = [];
+    if (map.slack_files) { const miss = map.slack_files.images + map.slack_files.documents - map.slack_files.images_found - map.slack_files.documents_found; if (miss > 0) tips.push(`Add the ${num(miss)} files shared in Slack: documents shared in conversations add context and more text.`); }
+    const dups = (map.collections || []).filter((c) => c.obsolete_given);
+    if (dups.length) tips.push(`Remove ${dups.length === 1 ? "the duplicate item" : `${dups.length} duplicate items`} (${dups.map((c) => esc(trunc(c.display_label || c.label, 30))).join(", ")}): they add no new text.`);
+    const unlinked = (map.collections || []).filter((c) => c.linkage && c.linkage.status === "unlinked");
+    if (unlinked.length) tips.push(`Check ${unlinked.length === 1 ? "the item" : `${unlinked.length} items`} that don't seem connected to the rest before relying on these numbers.`);
+    if ((map.sources || []).some((s) => s.snapshot_only)) tips.push("Clone code repositories with their history (git clone): commit messages and pull-request discussions are valuable training text.");
+    if (t.tokens && t.machine_tokens * 4 > t.tokens) tips.push(`${pct(t.machine_tokens, t.tokens)}% of the text is automated (bots, notifications, newsletters). Human conversation is what buyers value.`);
+    if (ev.not_evaluated.pdf_and_office_files) tips.push(`${num(ev.not_evaluated.pdf_and_office_files)} PDF and Office files aren't evaluated yet; a later release reads their text.`);
+    const todo = (map.sources || []).filter((s) => !s.in_selection && (s.links || 0) > 50).slice(0, 2);
+    if (todo.length) tips.push(`Add ${todo.map((s) => esc(s.name)).join(" and ")}: your data links to ${todo.length === 1 ? "it" : "them"} often, so ${todo.length === 1 ? "its" : "their"} exports would extend these conversations.`);
+    host.innerHTML = `
+      ${ev.incomplete ? `<div class="pc-note warn"><span><b>Stopped before the end.</b> These numbers cover only what was read.</span></div>` : ""}
+      <div class="card tv-card">
+        <div class="tv-head">
+          <div class="tv-headline">
+            <span class="pill tv-${esc(ev.rating)}">${esc(rating)} training value</span>
+            <h3>About <b>${compact(t.usable_tokens)}</b> usable tokens of human-written text</h3>
+            <p>${esc(ev.rating_reason)} ${t.conversation_tokens ? `Including ${compact(t.conversation_tokens)} of multi-turn conversation. ` : ""}${t.tokens ? `${pct(t.pre_llm_tokens, t.tokens)}% was written before 2023.` : ""}</p>
+          </div>
+          <div class="tv-figures">
+            <div><strong>${compact(t.tokens)}</strong><span>tokens in total</span></div>
+            <div><strong>${pct(t.usable_tokens, t.tokens)}%</strong><span>usable</span></div>
+            <div><strong>${compact(t.duplicate_tokens)}</strong><span>duplicated, not counted</span></div>
+            <div><strong>${compact(t.low_quality_tokens + t.machine_tokens)}</strong><span>low quality or automated</span></div>
+          </div>
+        </div>
+        ${bars ? `<div class="tv-bars"><div class="tv-sub">Usable tokens by kind</div>${bars}</div>` : ""}
+        <div class="tbl-wrap"><table class="tbl tv-tbl">
+          <thead><tr><th>Kind of data</th><th class="num">Documents</th><th class="num">Tokens</th><th class="num">Usable</th><th>Years</th><th>Value</th><th>Why</th></tr></thead>
+          <tbody>${rows}</tbody></table></div>
+        ${tips.length ? `<div class="step-other"><b>What would raise the value</b><ul>${tips.map((x) => `<li>${x}</li>`).join("")}</ul></div>` : ""}
+        <div class="tv-foot"><span class="muted small">${esc(ev.method)} Evaluated in ${num(ev.seconds)}s.</span><button class="btn ghost small" data-tv="run">Evaluate again</button></div>
+      </div>`;
+    host.querySelector('[data-tv="run"]').onclick = () => handlers.onEvaluate && handlers.onEvaluate();
+  }
+
   /** Two-step button: the first click asks, the second acts. */
   function confirmClick(btn, ask, act) {
     if (!btn) return;
@@ -880,5 +1004,5 @@
     requestAnimationFrame(step);
   }
 
-  window.ScoutMap = { render, bytes, num, esc };
+  window.ScoutMap = { render, bytes, num, esc, renderTraining };
 })();

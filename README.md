@@ -166,7 +166,35 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
    flagged "Only connected to …". A group is only flagged when it shows
    whose data it is (people, addresses, domains or distinctive names), not
    when it is merely thin.
-3. **Analysis:** collections, coverage, file formats and languages tables,
+3. **Training value** (run on demand: *Evaluate training value*). A second
+   pass reads every readable document in full, on this computer, and
+   measures its value as training data for AI models.
+   - **What counts as a document:** a chat conversation (a Slack
+     channel-day, a Teams chat, a Discord channel; 200 messages at most), an
+     email, a text file or a code file. Emails are split from mailboxes with
+     MIME parsing: attachments are skipped, base64 and quoted-printable are
+     decoded, and quoted replies and signatures are removed.
+   - **Measures:**
+     - tokens (about 1.33 per word, characters for unspaced scripts)
+     - kind: conversation, email, document, code, structured, or automated
+     - written by people, or by bots, notifications and bulk mail
+     - year, with text from before 2023 counted separately
+     - a 0–1 quality score (word shape, symbols, repetition, function words)
+     - exact and near duplicates (MinHash, 70% similarity)
+   - **Usable tokens** are written by people, score at least 0.5 for
+     quality, and aren't duplicated.
+   - **The owner sees:** a headline ("About 48M usable tokens of
+     human-written text"), a High/Medium/Low rating, bars by kind, and a
+     table by platform and kind (documents, tokens, usable tokens, years,
+     value ●●●, why). Below the table is "What would raise the value",
+     drawn from the map: missing Slack files, duplicate items, unconnected
+     items, code without history, PDFs not evaluated yet, and linked
+     platforms not added.
+   - **Speed and output:** it runs with progress and *Stop* (partial results
+     are marked incomplete), at roughly 100 MB/s of mail on a laptop. The
+     result goes into the saved map. `working-minds evaluate <inputs>` does
+     the same from the command line.
+4. **Analysis:** collections, coverage, file formats and languages tables,
    plus activity over time.
 
 ### Create data pack

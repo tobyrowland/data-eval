@@ -321,7 +321,7 @@ impl TeamsRecogniser {
             if by_person && !text.is_empty() {
                 let prose = super::language::strip_markup(text);
                 self.languages
-                    .add_segment(&super::language::strip_chat_code(&prose));
+                    .add_chat_message(&super::language::strip_chat_code(&prose));
             }
         }
     }

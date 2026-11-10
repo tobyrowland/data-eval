@@ -26,6 +26,8 @@ struct AppState {
     /// Items the owner removed from this assessment (paths), so they can be
     /// put back. Nothing on disk is touched.
     removed: Mutex<Vec<String>>,
+    /// The latest training-value evaluation, if one was run.
+    evaluation: Mutex<Option<serde_json::Value>>,
 }
 
 /// What the Add screen shows for one selection. Only metadata is read here.
@@ -201,6 +203,8 @@ fn finish(
     });
     remember_session(app, &inventory, &state.removed.lock().unwrap());
     *state.inventory.lock().unwrap() = Some(inventory);
+    // The data changed, so an earlier evaluation no longer applies.
+    *state.evaluation.lock().unwrap() = None;
     *state.last.lock().unwrap() = Some((json.clone(), text));
     Ok(json)
 }
@@ -680,6 +684,60 @@ fn forget_session(app: AppHandle, state: State<'_, AppState>) {
     state.removed.lock().unwrap().clear();
 }
 
+/// Reads every item again in full and evaluates its value as training data.
+/// Takes a while on large data; progress is sent as `scout://evaluate`.
+#[tauri::command]
+async fn evaluate(app: AppHandle, state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let (inputs, labels, exclude) = {
+        let guard = state.inventory.lock().unwrap();
+        let inv = guard
+            .as_ref()
+            .ok_or("There is no assessment to evaluate yet.")?;
+        (
+            inv.collections
+                .iter()
+                .map(|c| c.source.clone())
+                .collect::<Vec<_>>(),
+            inv.collections
+                .iter()
+                .map(|c| c.label.clone())
+                .collect::<Vec<_>>(),
+            inv.exclude.clone(),
+        )
+    };
+    let cancel = Arc::new(AtomicBool::new(false));
+    *state.cancel.lock().unwrap() = Some(cancel.clone());
+    let handle = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let mut last = Instant::now() - Duration::from_secs(1);
+        let ev = scout_core::evaluate::evaluate_inputs(
+            inputs,
+            labels,
+            exclude,
+            Some(cancel),
+            &mut |p| {
+                if last.elapsed() >= Duration::from_millis(150) {
+                    let _ = handle.emit("scout://evaluate", p);
+                    last = Instant::now();
+                }
+            },
+        );
+        serde_json::to_value(&ev).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    *state.cancel.lock().unwrap() = None;
+    let json = result?;
+    *state.evaluation.lock().unwrap() = Some(json.clone());
+    Ok(json)
+}
+
+/// The latest evaluation, if one was run in this session.
+#[tauri::command]
+fn evaluation_result(state: State<'_, AppState>) -> Option<serde_json::Value> {
+    state.evaluation.lock().unwrap().clone()
+}
+
 #[tauri::command]
 fn stop(state: State<'_, AppState>) {
     if let Some(c) = state.cancel.lock().unwrap().as_ref() {
@@ -717,6 +775,9 @@ fn save_map(app: AppHandle, state: State<'_, AppState>) -> Result<String, String
     // Include the owner's edits to the data-source list.
     let mut json = json.clone();
     json["source_plan"] = read_plan(&app);
+    if let Some(ev) = state.evaluation.lock().unwrap().as_ref() {
+        json["training_value"] = ev.clone();
+    }
     let pretty = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
     std::fs::write(dir.join(format!("{stem}.json")), pretty).map_err(|e| e.to_string())?;
     Ok(txt.display().to_string())
@@ -777,6 +838,8 @@ fn main() {
             pick_package_dest,
             build_package,
             stop,
+            evaluate,
+            evaluation_result,
             list_files,
             linking_files,
             link_file_counts,

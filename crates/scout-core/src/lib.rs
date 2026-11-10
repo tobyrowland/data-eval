@@ -7,6 +7,7 @@
 pub mod analyze;
 pub mod browse;
 pub mod detect;
+pub mod evaluate;
 pub mod guard;
 pub mod limits;
 pub mod model;

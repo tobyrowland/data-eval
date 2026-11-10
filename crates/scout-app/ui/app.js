@@ -267,15 +267,44 @@
   listen("scout://stage", () => { setStage(3); $("assess-current").textContent = "Checking duplicates, links and gaps…"; });
   $("stop").onclick = async () => { $("stop").textContent = "Stopping…"; $("stop").disabled = true; await invoke("stop"); };
 
+  // --------------------------------------------------- training value
+  // The evaluation re-reads everything; progress updates the section live.
+  const evalState = { running: false, progress: null };
+  function evalHost() { return document.getElementById("training-value"); }
+  async function runEvaluation(map) {
+    if (evalState.running || assessing) return;
+    evalState.running = true;
+    evalState.progress = null;
+    const draw = (ev) => { const h = evalHost(); if (h) window.ScoutMap.renderTraining(h, currentMap || map, ev, { onEvaluate: () => runEvaluation(currentMap || map), onStopEvaluate: () => invoke("stop") }, evalState.running ? evalState : null); };
+    draw(null);
+    try {
+      const ev = await invoke("evaluate");
+      evalState.running = false;
+      draw(ev);
+      toast(ev.incomplete ? "Evaluation stopped: the numbers cover what was read." : "Training value evaluated.");
+    } catch (err) {
+      evalState.running = false;
+      draw(null);
+      toast("The evaluation could not finish: " + err);
+    }
+  }
+  listen("scout://evaluate", (e) => {
+    if (!evalState.running) return;
+    evalState.progress = e.payload;
+    const h = evalHost();
+    if (h) window.ScoutMap.renderTraining(h, currentMap, null, { onStopEvaluate: () => invoke("stop") }, evalState);
+  });
+
   // ---------------------------------------------------------------- map
   async function showMap(map, banner) {
     lastSaved = null;
     currentMap = map;
     let plan = null;
     try { plan = await invoke("get_source_plan"); } catch (_) { /* first run */ }
-    const [linkCounts, removedItems] = await Promise.all([
+    const [linkCounts, removedItems, evaluation] = await Promise.all([
       invoke("link_file_counts").catch(() => ({})),
       invoke("removed_items").catch(() => []),
+      invoke("evaluation_result").catch(() => null),
     ]);
     show("screen-map");
     window.ScoutMap.render($("map-page"), map, {
@@ -292,7 +321,9 @@
       onPack: () => openPack(),
       onPlan: (p) => invoke("set_source_plan", { plan: p }).catch((e) => toast("Could not save your list: " + e)),
       files: fileHandlers,
-    }, { banner, plan, linkCounts, removedItems });
+      onEvaluate: () => runEvaluation(map),
+      onStopEvaluate: () => invoke("stop"),
+    }, { banner, plan, linkCounts, removedItems, evaluation, evaluating: evalState.running ? evalState : null });
   }
 
   // ---------------------------------------------------------------- guides

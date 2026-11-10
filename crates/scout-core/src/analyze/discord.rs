@@ -218,7 +218,7 @@ impl DiscordRecogniser {
         if first_seen && !text.is_empty() {
             self.sources.scan_text(text, 0);
             self.languages
-                .add_segment(&super::language::strip_chat_code(text));
+                .add_chat_message(&super::language::strip_chat_code(text));
         }
     }
 

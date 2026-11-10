@@ -221,7 +221,7 @@ impl SlackRecogniser {
                             // Mentions and links are <...> tokens; drop them.
                             let prose = super::language::strip_chat_code(text);
                             self.languages
-                                .add_segment(&super::language::strip_markup(&prose));
+                                .add_chat_message(&super::language::strip_markup(&prose));
                         }
                     }
                 }
