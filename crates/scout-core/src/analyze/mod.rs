@@ -22,6 +22,8 @@ pub struct Outcome {
     /// Leading text of a document for language detection, and whether the
     /// document was longer than the sample. Local only.
     pub sample: Option<(String, bool)>,
+    /// Hashed Message-IDs of the emails in a mailbox. Local only.
+    pub message_ids: Vec<u64>,
 }
 
 impl Outcome {
@@ -34,6 +36,7 @@ impl Outcome {
             words: 0,
             json: None,
             sample: None,
+            message_ids: Vec::new(),
         }
     }
     pub fn inventoried() -> Self {
@@ -45,6 +48,7 @@ impl Outcome {
             words: 0,
             json: None,
             sample: None,
+            message_ids: Vec::new(),
         }
     }
     pub fn with(status: Status, reason: Reason) -> Self {
@@ -56,6 +60,7 @@ impl Outcome {
             words: 0,
             json: None,
             sample: None,
+            message_ids: Vec::new(),
         }
     }
 }

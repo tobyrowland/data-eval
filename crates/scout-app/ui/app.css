@@ -478,23 +478,10 @@ body.dragging .drag-veil-card { transform: scale(1); }
   .reveal { opacity: 1; transform: none; }
 }
 
-/* ---------- step items and files (to-do → item → files) */
-.items-toggle { background: none; border: 0; padding: 0; margin-top: 6px; color: var(--teal); font-weight: 600; font-size: 13px; cursor: pointer; }
-.items-toggle:hover { text-decoration: underline; text-underline-offset: 3px; }
-.step-panel { grid-column: 2 / -1; background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; margin-top: -4px; }
-.si-group + .si-group { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
-.si-head { font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
-.si-item { padding: 6px 0; }
-.si-item + .si-item { border-top: 1px dashed var(--line); }
-.si-line { display: flex; align-items: center; gap: 10px; }
-.si-line .tbl-badge { flex: none; }
-.si-name { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.si-name b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.si-meta { font-size: 12.5px; color: var(--muted); }
-.si-actions { display: flex; gap: 6px; flex: none; }
+/* ---------- file trees inside items */
 .btn.danger, .link-btn.danger { color: var(--red); }
 .btn.armed, .link-btn.armed { background: #FBECEB; color: var(--red); text-decoration: none; border-radius: 6px; padding: 2px 8px; }
-.si-tree { margin: 8px 0 4px 36px; max-height: 420px; overflow: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.si-tree { margin: 6px 0 4px 34px; max-height: 420px; overflow: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
 .ft-switch { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 6px; }
 .ft-switch .link-btn { font-size: 12.5px; }
 .ft { list-style: none; margin: 0; padding: 0; }
@@ -511,7 +498,65 @@ body.dragging .drag-veil-card { transform: scale(1); }
 .chip-x:hover { color: var(--red); }
 .chip-x.armed { font-size: 12px; padding: 1px 6px; }
 @media (max-width: 760px) {
-  .step-panel { grid-column: 1 / -1; }
-  .si-line { flex-wrap: wrap; }
   .si-tree { margin-left: 0; }
+}
+
+/* ---------- platforms: one card per platform, with its items */
+.hero-stats small.dedup { display: block; font-size: 11.5px; color: var(--teal); margin-top: 2px; }
+.steps-progress.card { padding: 14px 18px; margin-bottom: 14px; }
+.pcard { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; margin-bottom: 14px; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+.pc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+.pc-title { display: flex; align-items: center; gap: 10px; }
+.pc-title h3 { margin: 0; font-size: 17px; }
+.pill { font-size: 12px; font-weight: 650; border-radius: 999px; padding: 3px 10px; }
+.pill.ok { background: var(--teal-soft); color: var(--teal); }
+.pill.partial { background: var(--amber-soft); color: #8A5A0B; }
+.pc-facts { color: var(--muted); font-size: 13px; }
+.pc-note { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13.5px; color: var(--ink-2); background: var(--surface-2); border-radius: 10px; padding: 8px 12px; margin: 6px 0; }
+.pc-note.warn { background: #FDF4E3; }
+.pc-note.ok { background: var(--teal-soft); color: var(--teal); }
+.pc-note-act { display: flex; gap: 6px; }
+.items-tbl { margin-top: 8px; }
+.items-tbl td { vertical-align: middle; }
+.items-tbl { table-layout: fixed; width: 100%; }
+.items-tbl th:nth-child(1) { width: 30%; }
+.items-tbl th:nth-child(2) { width: 7%; }
+.items-tbl th:nth-child(3) { width: 9%; }
+.items-tbl th:nth-child(4) { width: 13%; }
+.items-tbl th:nth-child(5) { width: 12%; }
+.items-tbl th:nth-child(6) { width: 16%; }
+.items-tbl th:nth-child(7) { width: 13%; }
+.items-tbl td { overflow: hidden; text-overflow: ellipsis; }
+.items-tbl td:nth-child(4) { font-size: 12.5px; white-space: normal; }
+.items-tbl td:last-child { overflow: visible; text-overflow: clip; white-space: nowrap; }
+.it-name { display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; color: inherit; font: inherit; width: 100%; min-width: 0; }
+.it-twist { width: 12px; color: var(--muted); flex: none; }
+.it-name .tbl-badge { margin: 0; flex: none; }
+.it-text { display: flex; flex-direction: column; min-width: 0; }
+.it-text b { white-space: normal; overflow-wrap: anywhere; line-height: 1.3; }
+.it-text small { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.it-row.is-dup { background: #FFF8F7; }
+.tree-row td { padding-top: 0; background: var(--surface-2); overflow: visible; white-space: normal; }
+.tree-row .si-tree { margin: 6px 0 10px; }
+.ov { display: inline-block; font-size: 12px; font-weight: 600; border-radius: 6px; padding: 2px 8px; white-space: normal; line-height: 1.3; max-width: 100%; }
+.ov.dup { background: #FBECEB; color: var(--red); }
+.ov.part { background: var(--amber-soft); color: #8A5A0B; }
+.ov.uniq { color: var(--muted); font-weight: 500; }
+.btn.danger-solid { background: var(--red); color: #fff; border: 0; }
+.btn.danger-solid.armed { background: #9E2F29; color: #fff; }
+.pc-links { margin-top: 10px; font-size: 13.5px; }
+.pc-links summary { cursor: pointer; color: var(--teal); font-weight: 600; }
+.lf-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0 6px 16px; border-top: 1px dashed var(--line); }
+.lf-row .si-tree { flex-basis: 100%; margin-left: 0; }
+.todo-card { padding: 14px 18px; margin-bottom: 14px; }
+.todo-head h3 { margin: 0; font-size: 16px; }
+.todo-head p { margin: 2px 0 6px; color: var(--muted); font-size: 13px; }
+.todo { display: grid; grid-template-columns: minmax(0, 1fr) 110px auto; gap: 16px; align-items: center; padding: 12px 0; border-top: 1px solid #EEF2F7; }
+.todo.done .todo-title { color: var(--teal); }
+.todo-title { font-weight: 650; font-size: 15px; }
+.todo-ev { color: var(--ink-2); font-size: 13.5px; margin-top: 2px; }
+.todo .pc-links { margin-top: 4px; font-size: 13px; }
+@media (max-width: 760px) {
+  .todo { grid-template-columns: 1fr; }
+  .items-tbl { table-layout: auto; }
 }

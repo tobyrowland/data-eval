@@ -56,6 +56,14 @@ pub struct Totals {
     pub exact_duplicate_bytes: u64,
     pub structured_records: u64,
     pub words_of_text: u64,
+    /// Files counted once: identical copies and excluded files left out.
+    pub unique_files: u64,
+    /// Records, messages and emails counted once: a Slack message or email
+    /// in two items, or a record in an identical copy of a file, counts once.
+    pub unique_records: u64,
+    /// Records, messages and emails left out of `unique_records` as
+    /// duplicates.
+    pub duplicate_records: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -103,6 +111,29 @@ pub struct CollectionSummary {
     pub explanation: String,
     pub formats: Vec<FormatSlice>,
     pub slack: Vec<SlackInventory>,
+    /// Platforms this item holds data from, e.g. "slack", "google_drive",
+    /// "email", "bitbucket". Empty for loose files.
+    pub platforms: Vec<&'static str>,
+    /// Other items holding the same messages or identical files.
+    pub overlaps: Vec<Overlap>,
+    /// Label of another item that holds (nearly) everything in this one, so
+    /// this one looks like an obsolete duplicate.
+    pub obsolete_given: Option<String>,
+}
+
+/// How much of one item is also in another item. Counts only.
+#[derive(Debug, Clone, Serialize)]
+pub struct Overlap {
+    /// The other item's label.
+    pub with: String,
+    /// Messages or emails in this item that are also in the other (Slack
+    /// exports, by channel and timestamp; mailboxes, by Message-ID).
+    pub shared_messages: u64,
+    /// Files in this item with an identical copy in the other.
+    pub identical_files: u64,
+    /// Share of this item covered by the other: messages for Slack exports,
+    /// files otherwise.
+    pub share_percent: f64,
 }
 
 /// One format family inside a collection, for the visual map.
@@ -268,7 +299,12 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         exact_duplicate_bytes: 0,
         structured_records: 0,
         words_of_text: inv.text.iter().map(|x| x.words).sum(),
+        unique_files: 0,
+        unique_records: 0,
+        duplicate_records: 0,
     };
+    let mut mail_records = vec![0u64; inv.collections.len()];
+    let mut other_unique_records = 0u64;
     let ncol = inv.collections.len();
     let mut col_status: Vec<BTreeMap<Status, u64>> =
         (0..ncol).map(|_| empty_status_counts()).collect();
@@ -277,6 +313,8 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
     let mut col_bytes = vec![0u64; ncol];
     let mut col_formats: Vec<BTreeMap<Format, (u64, u64, u64)>> =
         (0..ncol).map(|_| BTreeMap::new()).collect();
+    // Content hashes of each item's files, to find identical copies.
+    let mut col_hashes: Vec<Vec<&str>> = vec![Vec::new(); ncol];
 
     for it in &inv.items {
         if it.parent.is_none() {
@@ -304,22 +342,65 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         if let Some(r) = &it.reason {
             *reasons.entry(r.clone()).or_default() += 1;
         }
-        match &it.sha256 {
+        // Mailboxes are compared by Message-ID instead.
+        if let Some(h) = &it.sha256 {
+            if it.expanded_bytes > 0
+                && it.status != Status::Excluded
+                && !matches!(it.format, Format::Mbox | Format::Eml)
+            {
+                col_hashes[c].push(h.as_str());
+            }
+        }
+        let duplicate = match &it.sha256 {
             Some(h) => {
                 let seen = hashes.entry(h.as_str()).or_default();
                 *seen += 1;
                 if *seen > 1 {
                     t.exact_duplicate_files += 1;
                     t.exact_duplicate_bytes += it.expanded_bytes;
+                    true
                 } else {
                     t.unique_bytes += it.expanded_bytes;
+                    false
                 }
             }
-            None => t.unique_bytes += it.expanded_bytes,
+            None => {
+                t.unique_bytes += it.expanded_bytes;
+                false
+            }
+        };
+        // Records counted once. Slack messages and emails are counted by
+        // message below, so overlapping exports and mailboxes count once.
+        let recs = it.records.unwrap_or(0);
+        if matches!(it.format, Format::Mbox | Format::Eml) {
+            mail_records[c] += recs;
+        } else if inv.collections[c].source_kind != SourceKind::SlackExport {
+            if duplicate {
+                t.duplicate_records += recs;
+            } else {
+                other_unique_records += recs;
+            }
         }
     }
 
     let excluded = by_status[&Status::Excluded];
+    t.unique_files = t.logical_files - excluded - t.exact_duplicate_files;
+    let mut unique = other_unique_records;
+    for c in &inv.collections {
+        let i = c.id as usize;
+        if c.source_kind == SourceKind::SlackExport {
+            for s in inv.slack[i].inventories() {
+                let dup = s.records_also_in_other_exports.min(s.message_records);
+                unique += s.message_records - dup;
+                t.duplicate_records += dup;
+            }
+        }
+        let dup: u64 = inv.text[i].email_overlap.values().sum();
+        let dup = dup.min(mail_records[i]);
+        unique += mail_records[i] - dup;
+        t.duplicate_records += dup;
+    }
+    t.unique_records = unique;
     let examined = by_status[&Status::Assessed] + by_status[&Status::PartlyAssessed];
     let denom = t.logical_files - excluded;
     let pct = (denom > 0).then(|| (examined as f64 * 1000.0 / denom as f64).round() / 10.0);
@@ -328,6 +409,13 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
     let mut last_all: Option<i64> = None;
     let mut collections = Vec::new();
     let snapshots = code_snapshots(inv);
+    let (overlaps, obsolete) = collection_overlaps(inv, &col_hashes);
+    let attachment_cols: BTreeSet<u32> = inv
+        .attachments
+        .values()
+        .flatten()
+        .map(|&id| inv.items[id as usize].collection)
+        .collect();
     for c in &inv.collections {
         let i = c.id as usize;
         let slack = inv.slack[i].inventories();
@@ -411,6 +499,9 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
                 })
                 .collect(),
             slack,
+            platforms: platforms_of(inv, c, &snapshots, &attachment_cols),
+            overlaps: overlaps[i].clone(),
+            obsolete_given: obsolete[i].clone(),
         });
     }
 
@@ -436,10 +527,22 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         _ => String::new(),
     };
     summary.push(format!(
-        "We found {}{} with {}.",
+        "We found {}{} with {}{}.",
         plural(ncol as u64, "data collection", "data collections"),
         span,
-        plural(t.logical_files, "file", "files")
+        plural(t.unique_files, "file", "files"),
+        if t.exact_duplicate_files > 0 {
+            format!(
+                " (not counting {})",
+                plural(
+                    t.exact_duplicate_files,
+                    "identical copy",
+                    "identical copies"
+                )
+            )
+        } else {
+            String::new()
+        }
     ));
     if let Some(p) = pct {
         summary.push(format!("We examined the contents of {p}% of the files."));
@@ -654,6 +757,170 @@ fn takeout_part(label: &str) -> Option<String> {
     let tail = tail.trim_start_matches('-');
     let part = tail.split('.').next()?;
     (!part.is_empty()).then(|| part.to_string())
+}
+
+/// Platforms an item holds data from (not ones it merely links to).
+fn platforms_of(
+    inv: &Inventory,
+    c: &crate::model::Collection,
+    snapshots: &HashMap<u32, CodeSnapshot>,
+    attachment_cols: &BTreeSet<u32>,
+) -> Vec<&'static str> {
+    let has_mail = inv.items.iter().any(|it| {
+        it.collection == c.id
+            && matches!(it.format, Format::Mbox | Format::Eml)
+            && it.status != Status::Excluded
+    });
+    let mut out: Vec<&'static str> = Vec::new();
+    let mut add = |p: &'static str| {
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    };
+    if c.source_kind == SourceKind::SlackExport || attachment_cols.contains(&c.id) {
+        add("slack");
+    }
+    let t = &inv.text[c.id as usize];
+    for p in &t.takeout_products {
+        match p.as_str() {
+            "Drive" => add("google_drive"),
+            "Mail" => add("email"),
+            _ => add("google_other"),
+        }
+    }
+    for r in &t.git_remotes {
+        let (host, path) = r.split_once('/').unwrap_or((r.as_str(), ""));
+        if let Some(id) = crate::analyze::sources::classify(host, &format!("/{path}")) {
+            add(id);
+        }
+    }
+    if let Some(snap) = snapshots.get(&c.id) {
+        add(snap.service);
+    }
+    if has_mail && c.source_kind != SourceKind::SlackExport {
+        add("email");
+    }
+    out
+}
+
+/// For every item: which other items hold the same Slack messages or
+/// identical files, and whether another item holds (nearly) all of it.
+fn collection_overlaps(
+    inv: &Inventory,
+    col_hashes: &[Vec<&str>],
+) -> (Vec<Vec<Overlap>>, Vec<Option<String>>) {
+    let n = inv.collections.len();
+    // Shared Slack messages, symmetric: each overlap is recorded on the
+    // export read second, against the one that had the message first.
+    let mut shared = vec![BTreeMap::<u32, u64>::new(); n];
+    let mut messages = vec![0u64; n];
+    for c in &inv.collections {
+        for s in inv.slack[c.id as usize].inventories() {
+            messages[c.id as usize] += s.message_records;
+            for (&other, &k) in &s.overlap_by_collection {
+                if other == c.id || other as usize >= n {
+                    continue;
+                }
+                *shared[c.id as usize].entry(other).or_default() += k;
+                *shared[other as usize].entry(c.id).or_default() += k;
+            }
+        }
+    }
+    // Shared emails, by Message-ID, recorded the same way.
+    let mut emails = vec![0u64; n];
+    for c in &inv.collections {
+        let t = &inv.text[c.id as usize];
+        emails[c.id as usize] = t.emails_with_id;
+        for (&other, &k) in &t.email_overlap {
+            if other == c.id || other as usize >= n {
+                continue;
+            }
+            *shared[c.id as usize].entry(other).or_default() += k;
+            *shared[other as usize].entry(c.id).or_default() += k;
+        }
+    }
+    // Identical files.
+    let mut owners: HashMap<&str, BTreeSet<u32>> = HashMap::new();
+    for (c, hs) in col_hashes.iter().enumerate() {
+        for h in hs {
+            owners.entry(*h).or_default().insert(c as u32);
+        }
+    }
+    let mut identical = vec![BTreeMap::<u32, u64>::new(); n];
+    for (c, hs) in col_hashes.iter().enumerate() {
+        for h in hs {
+            for &o in &owners[h] {
+                if o as usize != c {
+                    *identical[c].entry(o).or_default() += 1;
+                }
+            }
+        }
+    }
+    let mut overlaps = vec![Vec::new(); n];
+    for c in &inv.collections {
+        let i = c.id as usize;
+        let others: BTreeSet<u32> = shared[i]
+            .keys()
+            .chain(identical[i].keys())
+            .copied()
+            .collect();
+        for o in others {
+            let sm = shared[i].get(&o).copied().unwrap_or(0);
+            let idf = identical[i].get(&o).copied().unwrap_or(0);
+            let files_share = if col_hashes[i].is_empty() {
+                0.0
+            } else {
+                language::pct(
+                    idf.min(col_hashes[i].len() as u64),
+                    col_hashes[i].len() as u64,
+                )
+            };
+            // An item is covered only as far as all of it is: its emails
+            // and its other files.
+            let share = if c.source_kind == SourceKind::SlackExport && messages[i] > 0 {
+                language::pct(sm.min(messages[i]), messages[i])
+            } else if emails[i] > 0 {
+                let mail_share = language::pct(sm.min(emails[i]), emails[i]);
+                if col_hashes[i].is_empty() {
+                    mail_share
+                } else {
+                    mail_share.min(files_share)
+                }
+            } else {
+                files_share
+            };
+            overlaps[i].push(Overlap {
+                with: inv.collections[o as usize].label.clone(),
+                shared_messages: sm,
+                identical_files: idf,
+                share_percent: share,
+            });
+        }
+        overlaps[i].sort_by(|a, b| b.share_percent.total_cmp(&a.share_percent));
+    }
+    // Obsolete: at least 99% held by one other item. When two items hold
+    // each other completely, the one added later is the duplicate.
+    let full = |i: usize, o: &str| {
+        overlaps[i]
+            .iter()
+            .any(|x| x.with == o && x.share_percent >= 99.0)
+    };
+    let mut obsolete = vec![None; n];
+    for c in &inv.collections {
+        let i = c.id as usize;
+        if let Some(best) = overlaps[i].iter().find(|x| x.share_percent >= 99.0) {
+            let o = inv
+                .collections
+                .iter()
+                .find(|x| x.label == best.with)
+                .unwrap();
+            let mutual = full(o.id as usize, &c.label);
+            if !mutual || c.id > o.id {
+                obsolete[i] = Some(best.with.clone());
+            }
+        }
+    }
+    (overlaps, obsolete)
 }
 
 /// A repository added as a code download (for example Bitbucket's or

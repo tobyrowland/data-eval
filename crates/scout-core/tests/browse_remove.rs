@@ -202,3 +202,132 @@ fn file_names_never_reach_the_data_map() {
     assert!(!json.contains("2021-01-01.json"));
     assert!(!json.contains("random/"));
 }
+
+#[test]
+fn platforms_and_obsolete_duplicates() {
+    let d = tempdir("platforms");
+    let (old, new, files) = fixture(&d);
+    // A Takeout part with Drive and Mail, an identical copy of it, a
+    // mailbox, and loose notes.
+    let takeout = zip_bytes(&[
+        ("Takeout/archive_browser.html", b"<html></html>"),
+        ("Takeout/Drive/Plans/Roadmap.md", b"# Roadmap\nShip it.\n"),
+        (
+            "Takeout/Mail/All mail.mbox",
+            b"From a@b Mon\nFrom: a\nSubject: x\n\nhello\n",
+        ),
+    ]);
+    write(&d, "takeout-20261106T153241Z-1-001.zip", &takeout);
+    write(&d, "copy/takeout-20261106T153241Z-1-001.zip", &takeout);
+    write(
+        &d,
+        "inbox.mbox",
+        b"From a@b Mon\nFrom: a\nSubject: y\n\nhi there\n",
+    );
+    write(&d, "notes/todo.txt", b"buy milk\n");
+    let inv = scan(
+        &[
+            old,
+            new,
+            files,
+            d.join("takeout-20261106T153241Z-1-001.zip"),
+            d.join("copy/takeout-20261106T153241Z-1-001.zip"),
+            d.join("inbox.mbox"),
+            d.join("notes"),
+        ],
+        ScanOptions::default(),
+    );
+    let map = build_data_map(&inv);
+    let col = |l: &str| map.collections.iter().find(|c| c.label == l).unwrap();
+    assert_eq!(col("old.zip").platforms, vec!["slack"]);
+    assert_eq!(col("files").platforms, vec!["slack"]);
+    assert_eq!(
+        col("takeout-20261106T153241Z-1-001.zip").platforms,
+        vec!["google_drive", "email"]
+    );
+    assert_eq!(col("inbox.mbox").platforms, vec!["email"]);
+    assert!(col("notes").platforms.is_empty());
+
+    // The older export is wholly inside the newer one.
+    assert_eq!(col("old.zip").obsolete_given.as_deref(), Some("new.zip"));
+    let o = &col("old.zip").overlaps[0];
+    assert_eq!((o.with.as_str(), o.shared_messages), ("new.zip", 2));
+    assert_eq!(o.share_percent, 100.0);
+    assert_eq!(
+        col("new.zip").obsolete_given,
+        None,
+        "the newer one has more"
+    );
+    // Two identical Takeout parts: the one added later is the duplicate.
+    let first = col("takeout-20261106T153241Z-1-001.zip");
+    let second = col("takeout-20261106T153241Z-1-001.zip (2)");
+    assert_eq!(first.obsolete_given, None);
+    assert_eq!(
+        second.obsolete_given.as_deref(),
+        Some("takeout-20261106T153241Z-1-001.zip")
+    );
+    // Mailboxes are compared by Message-ID, so only the other two files count.
+    assert_eq!(second.overlaps[0].identical_files, 2);
+    assert_eq!(col("notes").obsolete_given, None);
+}
+
+#[test]
+fn headline_totals_count_duplicates_once() {
+    let d = tempdir("unique-totals");
+    let (old, new, files) = fixture(&d);
+    let mail = |ids: &[&str]| {
+        ids.iter()
+            .map(|id| {
+                format!(
+                    "From a@b Mon\nMessage-ID: <{id}@example.com>\nSubject: s\n\nhello {id}\n\n"
+                )
+            })
+            .collect::<String>()
+    };
+    // Two mailboxes sharing two emails; one is also saved twice.
+    write(&d, "a.mbox", mail(&["1", "2", "3"]).as_bytes());
+    write(&d, "b.mbox", mail(&["2", "3", "4"]).as_bytes());
+    write(&d, "copy/a.mbox", mail(&["1", "2", "3"]).as_bytes());
+    let inv = scan(
+        &[
+            old,
+            new,
+            files,
+            d.join("a.mbox"),
+            d.join("b.mbox"),
+            d.join("copy/a.mbox"),
+        ],
+        ScanOptions::default(),
+    );
+    let map = build_data_map(&inv);
+    let t = &map.totals;
+    // Slack: 4 distinct messages (2 shared). Email: 4 distinct (5 repeats).
+    assert_eq!(t.unique_records, 8, "{t:?}");
+    assert_eq!(t.duplicate_records, 2 + 5);
+    assert_eq!(t.unique_files, t.logical_files - t.exact_duplicate_files);
+    assert!(t.exact_duplicate_files >= 1);
+    let col = |l: &str| map.collections.iter().find(|c| c.label == l).unwrap();
+    // The copy of a.mbox is an obsolete duplicate; b.mbox is not.
+    assert_eq!(col("a.mbox (2)").obsolete_given.as_deref(), Some("a.mbox"));
+    assert_eq!(col("b.mbox").obsolete_given, None);
+    let ov = col("b.mbox")
+        .overlaps
+        .iter()
+        .find(|o| o.with == "a.mbox")
+        .unwrap();
+    assert_eq!(ov.shared_messages, 2);
+    assert!(
+        map.summary[0].contains("not counting"),
+        "{}",
+        map.summary[0]
+    );
+
+    // Removing a.mbox re-reads the mailboxes that relied on it.
+    let aid = id_of(&inv, "a.mbox");
+    let inv = update(inv, &[aid], &[], vec![]);
+    let map = build_data_map(&inv);
+    assert_eq!(
+        map.totals.unique_records, 8,
+        "still 4 messages and 4 emails"
+    );
+}
