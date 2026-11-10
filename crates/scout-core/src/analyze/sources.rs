@@ -29,6 +29,13 @@ pub struct Service {
 pub const CATALOG: &[Service] = &[
     svc("slack", "Slack", "Conversations", "messages", &[]),
     svc(
+        "teams",
+        "Microsoft Teams",
+        "Conversations",
+        "messages",
+        &["microsoft teams", "teams"],
+    ),
+    svc(
         "email",
         "Email",
         "Conversations",
@@ -191,6 +198,7 @@ pub fn classify(host: &str, path: &str) -> Option<&'static str> {
         {
             "google_drive"
         }
+        _ if h == "teams.microsoft.com" || h == "teams.live.com" => "teams",
         _ if ends("notion.so") || ends("notion.site") => "notion",
         _ if ends("sharepoint.com") || ends("onedrive.live.com") || h == "1drv.ms" => {
             "microsoft365"

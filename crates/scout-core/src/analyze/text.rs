@@ -15,6 +15,8 @@ pub struct TextStats {
     /// Hashes of the Message-ID headers seen (MBOX and EML), to recognise
     /// the same email in another mailbox. Local only.
     pub message_ids: Vec<u64>,
+    /// Addresses in From/To/Cc headers (MBOX and EML), capped. Local only.
+    pub addresses: Vec<String>,
     /// Leading text, up to the language sample limit.
     pub sample: String,
     pub sample_truncated: bool,
@@ -81,6 +83,19 @@ pub fn stats_with(r: &mut dyn Read, mbox: bool, eml: bool) -> io::Result<TextSta
                     s.message_ids.push(h);
                 }
                 id_pending = false;
+            } else if s.addresses.len() < 20_000
+                && [&b"from:"[..], b"to:", b"cc:", b"reply-to:"]
+                    .iter()
+                    .any(|h| line.len() > h.len() && line[..h.len()].eq_ignore_ascii_case(h))
+            {
+                let l = String::from_utf8_lossy(&line);
+                for tok in l.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
+                    let t =
+                        tok.trim_matches(|c: char| matches!(c, '<' | '>' | '"' | '\'' | '(' | ')'));
+                    if t.contains('@') && t.contains('.') {
+                        s.addresses.push(t.to_ascii_lowercase());
+                    }
+                }
             } else if line.len() > 11 && line[..11].eq_ignore_ascii_case(b"message-id:") {
                 match message_id_hash(&line[11..]) {
                     Some(h) => s.message_ids.push(h),
@@ -111,6 +126,7 @@ pub fn analyze(r: &mut dyn Read, mbox: bool, eml: bool) -> io::Result<Outcome> {
     o.words = s.words;
     o.sample = Some((std::mem::take(&mut s.sample), s.sample_truncated));
     o.message_ids = std::mem::take(&mut s.message_ids);
+    o.addresses = std::mem::take(&mut s.addresses);
     Ok(o)
 }
 

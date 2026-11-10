@@ -330,6 +330,7 @@
   // How to export each kind of source. Kept short; the owner follows the
   // service's own admin screens. Nothing here is fetched from the internet.
   const EXPORT_GUIDES = {
+    teams: ["Ask your Microsoft 365 admin for an export of the Teams chats and channels: Microsoft Purview eDiscovery (choose HTML or individual messages rather than PST, which this release can count but not read yet), or a Teams Export API / Graph export, which saves JSON files.", "On free or personal Teams, use Export your data in your Microsoft account; it gives a ZIP with messages.json."],
     github: ["Clone each repository with its full history, using GitHub Desktop or <code class=\"k\">git clone</code>. Avoid “Download ZIP”, which drops the history.", "Pull requests and issues aren't part of a clone. An organisation owner can export them as a migration archive."],
     gitlab: ["Clone each repository with its full history (<code class=\"k\">git clone</code>).", "To include issues and merge requests, export the project from its settings (Export project)."],
     bitbucket: ["Clone each repository with its full history (<code class=\"k\">git clone</code>).", "Pull requests aren't part of a clone; note which repositories they belong to so they can be exported separately."],
@@ -379,6 +380,13 @@
 
   // ---------------------------------------------------------------- data pack
   let packDest = null, packing = false;
+  // Items that don't seem to belong with the rest, for the data-pack panel.
+  function unlinkedWarning() {
+    const list = ((currentMap && currentMap.collections) || []).filter((c) => c.linkage && c.linkage.status === "unlinked");
+    if (!list.length) return "";
+    return `<div class="guide-callout warn"><b>${list.length === 1 ? "1 item doesn't" : `${list.length} items don't`} seem connected to the rest of your data</b><br>${list.map((c) => esc(c.display_label || c.label)).join(", ")}. Check ${list.length === 1 ? "it belongs" : "they belong"} to the same organisation before sharing, or remove ${list.length === 1 ? "it" : "them"} from the map.</div>`;
+  }
+
   async function openPack() {
     let plan;
     try { plan = await invoke("package_plan"); } catch (e) { toast(String(e)); return; }
@@ -396,6 +404,7 @@
       <p>Working Minds copies everything you added into a new folder with standard names, ready to put on a drive. Google Takeout parts are unpacked and merged by product. Your originals aren't changed and nothing is uploaded.</p>
       <table class="tbl compact pack-tbl"><thead><tr><th>Folder in the pack</th><th>From</th></tr></thead><tbody>${rows}</tbody></table>
       <p class="muted small">About ${num(plan.total_files)} files, ${bytes(plan.total_bytes)}${plan.excluded_files ? ` · ${num(plan.excluded_files)} files you excluded are left out` : ""}. Includes a README explaining the layout.</p>
+      ${unlinkedWarning()}
       <div class="guide-callout"><b>This folder contains your actual data</b><br>Messages, documents, email and code are copied as they are. Only share it under an agreement you're happy with.</div>
       <div class="card dest-row"><div><div class="dest-label">Create it in</div><div class="dest-path" id="pack-dest">${packDest ? esc(packDest) : "No folder chosen yet"}</div></div><button class="btn ghost small" id="pack-pick">Choose folder…</button></div>
       <div id="pack-progress" hidden>
