@@ -951,8 +951,58 @@
           <tbody>${rows}</tbody></table></div>
         ${tips.length ? `<div class="step-other"><b>What would raise the value</b><ul>${tips.map((x) => `<li>${x}</li>`).join("")}</ul></div>` : ""}
         <div class="tv-foot"><span class="muted small">${esc(ev.method)} Evaluated in ${num(ev.seconds)}s.</span><button class="btn ghost small" data-tv="run">Evaluate again</button></div>
-      </div>`;
+      </div>
+      ${episodesCard(ev.episodes)}`;
     host.querySelector('[data-tv="run"]').onclick = () => handlers.onEvaluate && handlers.onEvaluate();
+  }
+
+  /** What to add to link more work, in the owner's words. */
+  function gapLine(g) {
+    const n = num(g.records);
+    const t = num(g.distinct_targets);
+    let what;
+    if (g.id === "ci") what = `${n} commits have no build or test results.`;
+    else if (["github", "bitbucket", "gitlab", "git"].includes(g.id)) what = `${n} messages and documents link to ${esc(g.name)} pull requests or commits (${t}), but the repository's history isn't here.`;
+    else if (g.id === "jira" || g.id === "linear") what = `${n} messages, emails and commits mention ${t} ${esc(g.name)} tickets you haven't added.`;
+    else what = `${n} messages and documents link to ${t} ${esc(g.name)} pages or items you haven't added.`;
+    return `<li><b>Add ${esc(g.name)}</b> <span>${what}</span><small class="muted">${esc(g.advice)}</small></li>`;
+  }
+
+  /** Work episodes: one piece of work rebuilt across systems. */
+  function episodesCard(e) {
+    if (!e) return "";
+    const gaps = (e.gaps || []).slice(0, 3);
+    const total = e.complete + e.partial + e.linked_discussion;
+    const seg = (n, cls, label) => (n ? `<span class="ep-seg ${cls}" style="flex:${n}" title="${label}: ${num(n)}"></span>` : "");
+    const pairs = (e.system_pairs || []).slice(0, 3).map((p) => `${esc(p.a_name)} ↔ ${esc(p.b_name)} (${num(p.episodes)})`).join(" · ");
+    const sources = [
+      e.commits ? `${num(e.commits)} commits` : "",
+      e.tickets ? `${num(e.tickets)} tickets` : "",
+      e.ci_logs ? `${num(e.ci_logs)} build logs (${num(e.ci_passed)} passed, ${num(e.ci_failed)} failed)` : "",
+    ].filter(Boolean).join(" · ");
+    const head = e.episodes
+      ? `<h3><b>${num(e.episodes)}</b> pieces of work linked across your systems</h3>`
+      : `<h3>No linked work found yet</h3>`;
+    return `<div class="card tv-card ep-card">
+      <div class="tv-head">
+        <div class="tv-headline">
+          <div class="tv-sub">Work episodes</div>
+          ${head}
+          <p>A work episode joins the records of one piece of work: the conversation about it, the ticket, the code change, the document, and the build that tested it. Records are joined only when they cite the same ticket, pull request, commit, document or email thread. Episodes that show the work done and its result are the most valuable kind of training data.</p>
+        </div>
+        ${e.episodes ? `<div class="tv-figures">
+          <div><strong>${num(e.complete)}</strong><span>complete: work and its result</span></div>
+          <div><strong>${num(e.partial)}</strong><span>partial</span></div>
+          <div><strong>${num(e.linked_discussion)}</strong><span>linked conversations</span></div>
+          <div><strong>${num(e.multi_system)}</strong><span>across two or more systems</span></div>
+        </div>` : ""}
+      </div>
+      ${total ? `<div class="ep-bar" aria-label="Episodes by completeness">${seg(e.complete, "c", "Complete")}${seg(e.partial, "p", "Partial")}${seg(e.linked_discussion, "d", "Linked conversations")}</div>
+        <div class="ep-legend muted small"><span><i class="c"></i>Complete</span><span><i class="p"></i>Partial</span><span><i class="d"></i>Linked conversations</span></div>` : ""}
+      ${pairs || sources ? `<p class="muted small ep-meta">${pairs ? `Most linked: ${pairs}` : ""}${pairs && sources ? "<br>" : ""}${sources ? `Read: ${sources}` : ""}</p>` : ""}
+      ${gaps.length ? `<div class="step-other ep-gaps"><b>Link more of your work</b><ul>${gaps.map(gapLine).join("")}</ul></div>`
+        : e.episodes ? "" : `<p class="muted small">Your items don't cite each other's tickets, pull requests, commits or documents yet. Adding a ticket tracker, repositories with history or build logs lets Working Minds join conversations to the work they led to.</p>`}
+    </div>`;
   }
 
   /** Two-step button: the first click asks, the second acts. */
@@ -1037,7 +1087,11 @@
       host.innerHTML = `<div class="card tv-slim"><div class="adding-ring small" aria-hidden="true"></div><span><b>Evaluating training value…</b> ${num(p.documents || 0)} documents measured</span><button class="btn ghost small" data-tvc="view">View progress</button></div>`;
     } else if (ev) {
       const rating = { high: "High", medium: "Medium", low: "Low" }[ev.rating] || ev.rating;
-      host.innerHTML = `<div class="card tv-slim"><span class="pill tv-${esc(ev.rating)}">${esc(rating)}</span><span><b>Training value:</b> about <b>${compact(ev.totals.usable_tokens)}</b> usable tokens of human-written text</span><button class="btn secondary small" data-tvc="view">View →</button></div>`;
+      const ep = ev.episodes || {};
+      const gap = (ep.gaps || [])[0];
+      const extra = ep.episodes ? ` · <b>${num(ep.episodes)}</b> linked work episodes` : "";
+      const hint = gap ? `<small class="muted">Add ${esc(gap.name)} to link ${num(gap.records)} more ${gap.id === "ci" ? "commits" : "records"}</small>` : "";
+      host.innerHTML = `<div class="card tv-slim"><span class="pill tv-${esc(ev.rating)}">${esc(rating)}</span><span><b>Training value:</b> about <b>${compact(ev.totals.usable_tokens)}</b> usable tokens of human-written text${extra}${hint ? `<br>${hint}` : ""}</span><button class="btn secondary small" data-tvc="view">View →</button></div>`;
     } else {
       host.innerHTML = `<div class="card tv-slim"><span><b>How much of this is useful for training AI models?</b> <span class="muted">Measured on this computer · ${esc(evaluationEstimate(map))}</span></span><button class="btn primary small" data-tvc="run">Evaluate training value</button></div>`;
     }

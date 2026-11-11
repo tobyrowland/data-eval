@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::fmt::Write as _;
 
-pub const SCORING_VERSION: &str = "wm-scores-2026.11.1";
+pub const SCORING_VERSION: &str = "wm-scores-2026.11.2";
 
 /// A 0–100 score with what it rests on.
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +105,9 @@ pub fn scores(map: &DataMap, ev: &Evaluation) -> Vec<Score> {
         ));
     }
     let volume = ((t.usable_tokens as f64 + 1.0).log10() / 8.0 * 100.0).clamp(0.0, 100.0);
+    let e = &ev.episodes;
+    let points = e.complete as f64 + 0.5 * e.partial as f64 + 0.2 * e.linked_discussion as f64;
+    let linkage = ((points + 1.0).log10() / 4.0 * 100.0).clamp(0.0, 100.0);
     vec![
         Score {
             id: "volume",
@@ -162,6 +165,19 @@ pub fn scores(map: &DataMap, ev: &Evaluation) -> Vec<Score> {
             basis: format!(
                 "{}% of usable tokens are multi-turn conversation",
                 pct(t.conversation_tokens, t.usable_tokens)
+            ),
+        },
+        Score {
+            id: "linkage",
+            name: "Linked work episodes",
+            score: linkage as u32,
+            weight: 0.10,
+            basis: format!(
+                "{} episodes ({} complete, {} partial, {} linked discussion); 100 = 10k complete (log scale)",
+                compact(e.episodes),
+                compact(e.complete),
+                compact(e.partial),
+                compact(e.linked_discussion)
             ),
         },
         Score {
@@ -409,6 +425,71 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
         let _ = writeln!(md, "| {} | {}% |", l.language, l.share_percent);
     }
 
+    md.push_str("\n## Work episodes\n\n");
+    md.push_str("A work episode is one piece of work rebuilt from several records that cite the same thing: a ticket key, a pull request or commit, a shared document, an email thread. Roles: *intent* (a ticket opened), *discussion* (chat, email), *action* (a commit, a document) and *outcome* (a CI run, a ticket resolved). *Complete* episodes have action, outcome and intent or discussion; they are the most valuable for training agents because they show the goal, the steps across tools and whether it worked. Links are exact references only (no guessing from names or dates); a reference shared by more than 50 records, or a record citing more than 8, does not join records.\n\n");
+    let e = &ev.episodes;
+    let _ = writeln!(md, "| Measure | Value |\n|---|---|");
+    for (label, v) in [
+        ("Episodes", e.episodes),
+        (
+            "Complete (action + outcome + intent or discussion)",
+            e.complete,
+        ),
+        ("Partial (two or more roles)", e.partial),
+        ("Linked discussion only", e.linked_discussion),
+        ("With an outcome", e.with_outcome),
+        ("Spanning two or more systems", e.multi_system),
+        ("Starting before 2023", e.pre_llm),
+        ("Records in episodes", e.records_linked),
+        ("Tokens in episodes", e.tokens),
+        (
+            "Groups too large to be one piece of work (not counted)",
+            e.clusters,
+        ),
+        ("Commits read from repository history", e.commits),
+        ("Tickets read from tracker exports", e.tickets),
+        ("CI logs (passed / failed)", e.ci_logs),
+    ] {
+        if label.starts_with("CI logs") {
+            let _ = writeln!(
+                md,
+                "| {label} | {} ({} / {}) |",
+                v, e.ci_passed, e.ci_failed
+            );
+        } else {
+            let _ = writeln!(md, "| {label} | {v} |");
+        }
+    }
+    let _ = writeln!(
+        md,
+        "\nEpisodes by records: 2: {}, 3–5: {}, 6–20: {}, 21+: {}.",
+        e.by_size[0], e.by_size[1], e.by_size[2], e.by_size[3]
+    );
+    if !e.system_pairs.is_empty() {
+        md.push_str("\n| Systems linked | Episodes |\n|---|---|\n");
+        for p in &e.system_pairs {
+            let _ = writeln!(md, "| {} ↔ {} | {} |", p.a_name, p.b_name, p.episodes);
+        }
+    }
+    if !e.systems.is_empty() {
+        md.push_str(
+            "\n| System | Records citing or cited | Of which in episodes |\n|---|---|---|\n",
+        );
+        for s in &e.systems {
+            let _ = writeln!(md, "| {} | {} | {} |", s.name, s.records, s.linked);
+        }
+    }
+    if !e.gaps.is_empty() {
+        md.push_str("\nSystems referenced but not uploaded (adding them would link more records):\n\n| System | Records that would gain a link | Distinct items cited |\n|---|---|---|\n");
+        for g in &e.gaps {
+            let _ = writeln!(
+                md,
+                "| {} | {} | {} |",
+                g.name, g.records, g.distinct_targets
+            );
+        }
+    }
+
     md.push_str("\n## Items in the assessment\n\n| Item | Type | Platforms | Files | Size (bytes) | Dates | Linked to the rest | Overlap |\n|---|---|---|---|---|---|---|---|\n");
     for c in &map.collections {
         let overlap = match (&c.obsolete_given, c.overlaps.first()) {
@@ -508,6 +589,7 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
         "totals": ev.totals,
         "rows": ev.rows,
         "distributions": ev.distributions,
+        "episodes": ev.episodes,
         "not_evaluated": ev.not_evaluated,
         "incomplete": ev.incomplete,
         "items": map.collections.iter().map(|c| json!({

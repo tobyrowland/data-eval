@@ -9,6 +9,10 @@ pub struct Email {
     /// Bulk or automated mail (newsletters, notifications).
     pub automated: bool,
     pub year: Option<i32>,
+    /// The thread's first message ID (References, else In-Reply-To, else
+    /// its own Message-ID); empty if none.
+    pub thread: String,
+    pub subject: String,
 }
 
 #[derive(Default)]
@@ -32,6 +36,10 @@ pub struct MailSplitter {
     // top-level message
     automated: bool,
     year: Option<i32>,
+    message_id: String,
+    in_reply_to: String,
+    references: String,
+    subject: String,
     top_type: String,
     top_encoding: String,
     // current MIME part
@@ -58,7 +66,7 @@ fn param(v: &str, name: &str) -> Option<String> {
     })
 }
 
-fn year_of(date: &str) -> Option<i32> {
+pub fn year_of(date: &str) -> Option<i32> {
     date.split(|c: char| !c.is_ascii_digit())
         .filter(|t| t.len() == 4)
         .filter_map(|t| t.parse::<i32>().ok())
@@ -117,6 +125,18 @@ pub fn decode_qp(s: &[u8]) -> Vec<u8> {
         i += 1;
     }
     out
+}
+
+/// The first `<id>` in a header (lower case), or the trimmed value.
+fn first_id(v: &str) -> String {
+    match (v.find('<'), v.find('>')) {
+        (Some(s), Some(e)) if e > s => v[s + 1..e].trim().to_ascii_lowercase(),
+        _ => v
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase(),
+    }
 }
 
 /// Readable text without quoted replies, forwarded history or signatures.
@@ -270,6 +290,14 @@ impl MailSplitter {
         for h in &headers {
             if let Some(v) = header_value(h, "date") {
                 self.year = year_of(v);
+            } else if let Some(v) = header_value(h, "message-id") {
+                self.message_id = first_id(v);
+            } else if let Some(v) = header_value(h, "in-reply-to") {
+                self.in_reply_to = first_id(v);
+            } else if let Some(v) = header_value(h, "references") {
+                self.references = first_id(v);
+            } else if let Some(v) = header_value(h, "subject") {
+                self.subject = v.chars().take(500).collect();
             } else if header_value(h, "list-unsubscribe").is_some()
                 || header_value(h, "list-id").is_some()
             {
@@ -358,10 +386,17 @@ impl MailSplitter {
         } else {
             String::new()
         };
+        let thread = [&self.references, &self.in_reply_to, &self.message_id]
+            .into_iter()
+            .find(|s| !s.is_empty())
+            .cloned()
+            .unwrap_or_default();
         self.done.push(Email {
             text: strip_quotes(&text),
             automated: self.automated,
             year: self.year,
+            thread,
+            subject: std::mem::take(&mut self.subject),
         });
         // Reset for the next email.
         let mbox = self.mbox;

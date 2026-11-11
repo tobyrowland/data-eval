@@ -113,18 +113,9 @@ pub fn json(r: &mut dyn Read, max_bytes: usize) -> io::Result<Outcome> {
     }
 }
 
-/// Reads a small CSV with a header row into JSON objects (one per row,
-/// keyed by header), for recognisers that need the rows themselves, such
-/// as a Discord package's `messages.csv`. Larger files are only counted.
-pub fn csv_rows(r: &mut dyn Read, max_bytes: usize) -> io::Result<Outcome> {
-    let buf = read_head(r, max_bytes + 1)?;
-    if buf.len() > max_bytes {
-        let mut o = delimited(&mut &buf[..max_bytes], b',')?;
-        o.status = Status::PartlyAssessed;
-        o.reason = Some(Reason::ObjectTooLarge);
-        return Ok(o);
-    }
-    let text = String::from_utf8_lossy(&buf);
+/// Splits CSV text into rows of fields (quoted fields may hold commas,
+/// quotes and newlines).
+pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut row: Vec<String> = Vec::new();
     let mut field = String::new();
@@ -154,6 +145,22 @@ pub fn csv_rows(r: &mut dyn Read, max_bytes: usize) -> io::Result<Outcome> {
         row.push(field);
         rows.push(row);
     }
+    rows
+}
+
+/// Reads a small CSV with a header row into JSON objects (one per row,
+/// keyed by header), for recognisers that need the rows themselves, such
+/// as a Discord package's `messages.csv`. Larger files are only counted.
+pub fn csv_rows(r: &mut dyn Read, max_bytes: usize) -> io::Result<Outcome> {
+    let buf = read_head(r, max_bytes + 1)?;
+    if buf.len() > max_bytes {
+        let mut o = delimited(&mut &buf[..max_bytes], b',')?;
+        o.status = Status::PartlyAssessed;
+        o.reason = Some(Reason::ObjectTooLarge);
+        return Ok(o);
+    }
+    let text = String::from_utf8_lossy(&buf);
+    let rows = parse_csv(&text);
     let mut it = rows.into_iter();
     let header = it.next().unwrap_or_default();
     let objs: Vec<serde_json::Value> = it
