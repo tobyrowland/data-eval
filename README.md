@@ -168,11 +168,12 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
    when it is merely thin.
 3. **Two tabs.** **Inventory** holds everything above: the map and Your
    platforms (what's collected, the files in each item, duplicates, missing
-   files and unconnected data), ending with a pointer to the second tab.
+   files and unconnected data) and All items (one row per file, folder or
+   export added), ending with a pointer to the second tab.
    **Analysis & value** holds the training value (with *Evaluate training
    value*, live progress and *Stop*), linked work and what to add to raise
    the value, then what's in the data: coverage, activity over time, file
-   formats, languages and the collections table. Housekeeping tips stay on
+   formats and languages. Housekeeping tips stay on
    Inventory; value tips stay on Analysis & value.
 
    **Training value.** The evaluation is a second
