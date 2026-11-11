@@ -130,6 +130,17 @@ fn main() -> ExitCode {
                 r.reason
             );
         }
+        let e = &ev.episodes;
+        println!(
+            "Linked work: {} ({} complete, {} partial, {} linked conversations) · {} commits · {} tickets · {} CI logs",
+            e.episodes, e.complete, e.partial, e.linked_discussion, e.commits, e.tickets, e.ci_logs
+        );
+        for g in &e.gaps {
+            println!(
+                "  Add {}: {} records would gain a link. {}",
+                g.name, g.records, g.advice
+            );
+        }
         eprintln!("Evaluated in {:.1}s.", started.elapsed().as_secs_f64());
         if let Some(out) = report_out {
             let map = build_data_map(&inventory);

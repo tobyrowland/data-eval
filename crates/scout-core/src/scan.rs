@@ -468,6 +468,13 @@ impl Scanner<'_> {
             sha256: None,
             records: None,
         });
+        if let Some(ev) = &self.opts.evaluator {
+            if status != Status::Excluded {
+                if let Ok(mut e) = ev.lock() {
+                    e.note_file(ctx.collection, &ctx.path, format);
+                }
+            }
+        }
         if let Some(product) = crate::analyze::sources::takeout_product(&ctx.path) {
             let t = &mut self.text[ctx.collection as usize].takeout_products;
             if !t.contains(product) {
@@ -536,6 +543,19 @@ impl Scanner<'_> {
     }
 
     fn visit_dir(&mut self, dir: &Path, logical: &str, collection: u32) {
+        // During an evaluation pass, a repository's history is read too.
+        if logical == ".git" || logical.ends_with("/.git") {
+            if let Some(ev) = &self.opts.evaluator {
+                let repo = crate::evaluate::git::read_repo(dir);
+                let name = Path::new(logical.trim_end_matches("/.git"))
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if let Ok(mut e) = ev.lock() {
+                    e.add_repo(collection, repo, &name);
+                }
+            }
+        }
         let entries = match fs::read_dir(dir) {
             Ok(rd) => {
                 let mut v: Vec<_> = rd.filter_map(Result::ok).collect();
@@ -1027,11 +1047,9 @@ impl Scanner<'_> {
             self.note_limit(&r.clone());
         }
         let bytes = m.bytes_read();
-        if let Some(sk) = sink {
-            sk.finish(bytes);
-        }
+        let handled = sink.is_some_and(|sk| sk.finish(bytes));
         if let Some(ev) = &self.opts.evaluator {
-            if matches!(format, Format::Csv | Format::Tsv | Format::Jsonl) {
+            if !handled && matches!(format, Format::Csv | Format::Tsv | Format::Jsonl) {
                 if let Ok(mut e) = ev.lock() {
                     e.add_structured(ctx.collection, bytes);
                 }

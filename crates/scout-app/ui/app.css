@@ -672,3 +672,16 @@ body.dragging .drag-veil-card { transform: scale(1); }
 .report-actions { flex-wrap: wrap; padding-top: 12px; border-top: 1px solid var(--line); }
 .report-actions > div { display: flex; flex-wrap: wrap; gap: 8px; }
 .report-preview { max-height: 42vh; overflow: auto; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+
+/* Work episodes */
+.ep-bar { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--surface-2); margin: 14px 0 6px; }
+.ep-seg.c, .ep-legend i.c { background: var(--teal); }
+.ep-seg.p, .ep-legend i.p { background: #7FB8C4; }
+.ep-seg.d, .ep-legend i.d { background: #C9D6E2; }
+.ep-legend { display: flex; gap: 14px; flex-wrap: wrap; }
+.ep-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: baseline; }
+.ep-meta { margin: 10px 0 0; }
+.ep-gaps { padding-left: 0; margin-top: 12px; }
+.ep-gaps li { margin-bottom: 8px; }
+.ep-gaps li span { display: inline; }
+.ep-gaps li small { display: block; }
