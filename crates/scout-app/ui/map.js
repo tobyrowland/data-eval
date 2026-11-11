@@ -224,8 +224,6 @@
     const pct = cov.content_examined_percent ?? 0;
     const sp = span(map);
     const plan = normalisePlan(extra.plan);
-    const showTabs = !!(extra.evaluation || extra.evaluating);
-    if (!showTabs) activeTab = "map";
     // The company: the owner's own name if they set one, else the detected one.
     const company = plan.company ? { name: plan.company, confidence: "set", evidence: [] } : map.company || null;
     const M = mapSvg(map, plan, company);
@@ -258,10 +256,10 @@
         </div>
       </div>
       ${extra.banner || ""}
-      ${showTabs ? `<div class="tabs" role="tablist">
-        <button role="tab" class="tab ${activeTab === "map" ? "on" : ""}" data-tab="map" aria-selected="${activeTab === "map"}">Data map</button>
-        <button role="tab" class="tab ${activeTab === "training" ? "on" : ""}" data-tab="training" aria-selected="${activeTab === "training"}">Training value${extra.evaluating ? ` <span class="tab-dot" aria-hidden="true"></span>` : ""}</button>
-      </div>` : ""}
+      <div class="tabs" role="tablist">
+        <button role="tab" class="tab ${activeTab === "map" ? "on" : ""}" data-tab="map" aria-selected="${activeTab === "map"}">Inventory</button>
+        <button role="tab" class="tab ${activeTab === "training" ? "on" : ""}" data-tab="training" aria-selected="${activeTab === "training"}">Analysis &amp; value${extra.evaluating ? ` <span class="tab-dot" aria-hidden="true"></span>` : ""}</button>
+      </div>
       <div class="tab-pane" data-pane="map" ${activeTab === "map" ? "" : "hidden"}>
       <section class="card hero reveal" style="animation-delay:60ms">
         <div class="hero-top">
@@ -280,8 +278,6 @@
         </div>
       </section>
 
-      <div id="tv-card" class="reveal" style="animation-delay:200ms"></div>
-
       <section class="section reveal" style="animation-delay:250ms">
         <div class="section-head">
           <div><h2>Your platforms</h2><p>What you've collected from each platform, the items in it and their stats, and what your data points to that's still missing. Remove duplicates and anything that isn't yours.</p></div>
@@ -292,24 +288,24 @@
         <div id="next-steps"></div>
       </section>
 
-
-      <section class="section reveal" style="animation-delay:400ms">
-        <div class="section-head"><div><h2>Analysis</h2><p>What is in the data you added, measured on this computer. Every file is counted, including those we can't read yet.</p></div></div>
-        ${collectionsTable()}
-        <div class="grid-2">
-          ${coverageCard()}
-          ${T ? `<div class="card panel-card"><div class="card-head"><div><h3>Activity over time</h3><p>Message records per month, from timestamps inside your exports</p></div></div><div id="tl-host">${T.svg}</div></div>` : formatsCard()}
-        </div>
-        ${T ? formatsCard() : ""}
-        ${languagesBlock()}
-      </section>
+      <div id="tv-card" class="reveal" style="animation-delay:300ms"></div>
       </div>
       <div class="tab-pane" data-pane="training" ${activeTab === "training" ? "" : "hidden"}>
         <div class="section-head tv-pane-head">
-          <div><h2>Training value</h2><p>How much of your data is useful for training AI models, measured document by document on this computer.</p></div>
+          <div><h2>Training value</h2><p>How much of your data is useful for training AI models, measured document by document on this computer, and how to raise it by linking your work across systems.</p></div>
           <div class="section-actions"><button class="btn primary" data-act="send-report" ${extra.evaluation ? "" : "disabled"}>Send report to Working Minds</button></div>
         </div>
         <div id="training-value"></div>
+        <section class="section">
+          <div class="section-head"><div><h2>What's in your data</h2><p>Measured on this computer. Every file is counted, including those we can't read yet.</p></div></div>
+          <div class="grid-2">
+            ${coverageCard()}
+            ${T ? `<div class="card panel-card"><div class="card-head"><div><h3>Activity over time</h3><p>Message records per month, from timestamps inside your exports</p></div></div><div id="tl-host">${T.svg}</div></div>` : formatsCard()}
+          </div>
+          ${T ? formatsCard() : ""}
+          ${languagesBlock()}
+          ${collectionsTable()}
+        </section>
       </div>
       <div class="privacy-foot reveal" style="animation-delay:600ms"><span class="status-dot"></span>${esc(map.privacy.statement)}</div>
     `;
@@ -885,7 +881,7 @@
     if (!ev) {
       host.innerHTML = `<div class="card tv-card tv-intro">
         <div><b>How much of this is useful for training AI models?</b>
-          <p>Working Minds reads every message, email and document in full, on this computer, and measures how much is written by people, how good the text is, how much is duplicated and how much predates AI-written text. It takes ${esc(evaluationEstimate(map))} for your data.</p></div>
+          <p>Working Minds reads every message, email and document in full, on this computer, and measures how much is written by people, how good the text is, how much is duplicated and how much predates AI-written text. It also finds work linked across your systems (a conversation, its ticket, the code change and the build) and tells you what to add to link more. It takes ${esc(evaluationEstimate(map))} for your data.</p></div>
         <button class="btn primary" data-tv="run">Evaluate training value</button></div>`;
       host.querySelector('[data-tv="run"]').onclick = () => handlers.onEvaluate && handlers.onEvaluate();
       return;
@@ -917,17 +913,15 @@
     const kinds = [...byKind.entries()].filter(([, k]) => k.v > 0).sort((a, b) => b[1].v - a[1].v);
     const maxK = Math.max(1, ...kinds.map(([, k]) => k.v));
     const bars = kinds.map(([kind, k]) => `<div class="tv-bar"><span class="tv-bar-label">${esc(k.label)}</span><span class="tv-bar-track"><span style="width:${(k.v * 100) / maxK}%;background:${KIND_COLOR[kind]}"></span></span><span class="tv-bar-val">${compact(k.v)}</span></div>`).join("");
-    // What would raise the value.
+    // Other ways to raise the value (housekeeping such as duplicates and
+    // missing Slack files lives on the Inventory tab).
     const tips = [];
-    if (map.slack_files) { const miss = map.slack_files.images + map.slack_files.documents - map.slack_files.images_found - map.slack_files.documents_found; if (miss > 0) tips.push(`Add the ${num(miss)} files shared in Slack: documents shared in conversations add context and more text.`); }
-    const dups = (map.collections || []).filter((c) => c.obsolete_given);
-    if (dups.length) tips.push(`Remove ${dups.length === 1 ? "the duplicate item" : `${dups.length} duplicate items`} (${dups.map((c) => esc(trunc(c.display_label || c.label, 30))).join(", ")}): they add no new text.`);
-    const unlinked = (map.collections || []).filter((c) => c.linkage && c.linkage.status === "unlinked");
-    if (unlinked.length) tips.push(`Check ${unlinked.length === 1 ? "the item" : `${unlinked.length} items`} that don't seem connected to the rest before relying on these numbers.`);
-    if ((map.sources || []).some((s) => s.snapshot_only)) tips.push("Clone code repositories with their history (git clone): commit messages and pull-request discussions are valuable training text.");
+    const gapIds = new Set(((ev.episodes || {}).gaps || []).map((g) => g.id));
+    const gitGap = ["github", "bitbucket", "gitlab", "git"].some((g) => gapIds.has(g));
+    if (!gitGap && (map.sources || []).some((s) => s.snapshot_only)) tips.push("Clone code repositories with their history (git clone): commit messages link conversations to the code they led to.");
     if (t.tokens && t.machine_tokens * 4 > t.tokens) tips.push(`${pct(t.machine_tokens, t.tokens)}% of the text is automated (bots, notifications, newsletters). Human conversation is what buyers value.`);
     if (ev.not_evaluated.pdf_and_office_files) tips.push(`${num(ev.not_evaluated.pdf_and_office_files)} PDF and Office files aren't evaluated yet; a later release reads their text.`);
-    const todo = (map.sources || []).filter((s) => !s.in_selection && (s.links || 0) > 50).slice(0, 2);
+    const todo = (map.sources || []).filter((s) => !s.in_selection && (s.links || 0) > 50 && !gapIds.has(s.id)).slice(0, 2);
     if (todo.length) tips.push(`Add ${todo.map((s) => esc(s.name)).join(" and ")}: your data links to ${todo.length === 1 ? "it" : "them"} often, so ${todo.length === 1 ? "its" : "their"} exports would extend these conversations.`);
     host.innerHTML = `
       ${ev.incomplete ? `<div class="pc-note warn"><span><b>Stopped before the end.</b> These numbers cover only what was read.</span></div>` : ""}
@@ -949,10 +943,9 @@
         <div class="tbl-wrap"><table class="tbl tv-tbl">
           <thead><tr><th>Kind of data</th><th class="num">Documents</th><th class="num">Tokens</th><th class="num">Usable</th><th>Years</th><th>Value</th><th>Why</th></tr></thead>
           <tbody>${rows}</tbody></table></div>
-        ${tips.length ? `<div class="step-other"><b>What would raise the value</b><ul>${tips.map((x) => `<li>${x}</li>`).join("")}</ul></div>` : ""}
         <div class="tv-foot"><span class="muted small">${esc(ev.method)} Evaluated in ${num(ev.seconds)}s.</span><button class="btn ghost small" data-tv="run">Evaluate again</button></div>
       </div>
-      ${episodesCard(ev.episodes)}`;
+      ${episodesCard(ev.episodes, tips)}`;
     host.querySelector('[data-tv="run"]').onclick = () => handlers.onEvaluate && handlers.onEvaluate();
   }
 
@@ -969,8 +962,9 @@
   }
 
   /** Linked work ("work trajectories"): one piece of work rebuilt across systems. */
-  function episodesCard(e) {
+  function episodesCard(e, tips) {
     if (!e) return "";
+    tips = tips || [];
     const gaps = (e.gaps || []).slice(0, 3);
     const total = e.complete + e.partial + e.linked_discussion;
     const seg = (n, cls, label) => (n ? `<span class="ep-seg ${cls}" style="flex:${n}" title="${label}: ${num(n)}"></span>` : "");
@@ -986,7 +980,7 @@
     return `<div class="card tv-card ep-card">
       <div class="tv-head">
         <div class="tv-headline">
-          <div class="tv-sub">Linked work</div>
+          <div class="tv-sub">Raise the value · linked work</div>
           ${head}
           <p>Working Minds joins the records of one piece of work: the conversation about it, the ticket, the code change, the document, and the build that tested it. Records are joined only when they cite the same ticket, pull request, commit, document or email thread. Linked work that shows what was done and how it turned out is the most valuable kind of training data.</p>
         </div>
@@ -1002,6 +996,7 @@
       ${pairs || sources ? `<p class="muted small ep-meta">${pairs ? `Most linked: ${pairs}` : ""}${pairs && sources ? "<br>" : ""}${sources ? `Read: ${sources}` : ""}</p>` : ""}
       ${gaps.length ? `<div class="step-other ep-gaps"><b>Link more of your work</b><ul>${gaps.map(gapLine).join("")}</ul></div>`
         : e.episodes ? "" : `<p class="muted small">Your items don't cite each other's tickets, pull requests, commits or documents yet. Adding a ticket tracker, repositories with history or build logs lets Working Minds join conversations to the work they led to.</p>`}
+      ${tips.length ? `<div class="step-other ep-gaps"><b>More ways to raise the value</b><ul>${tips.map((x) => `<li>${x}</li>`).join("")}</ul></div>` : ""}
     </div>`;
   }
 
@@ -1079,26 +1074,22 @@
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  /** The slim training-value card on the Data map tab. */
-  function renderTvCard(host, map, ev, state, handlers) {
+  /** The last card on the Inventory tab: a pointer to Analysis & value. */
+  function renderTvCard(host, map, ev, state) {
     if (!host) return;
+    let text;
     if (state && state.running) {
       const p = state.progress || {};
-      host.innerHTML = `<div class="card tv-slim"><div class="adding-ring small" aria-hidden="true"></div><span><b>Evaluating training value…</b> ${num(p.documents || 0)} documents measured</span><button class="btn ghost small" data-tvc="view">View progress</button></div>`;
+      text = `<div class="adding-ring small" aria-hidden="true"></div><span><b>Evaluating training value…</b> ${num(p.documents || 0)} documents measured</span>`;
     } else if (ev) {
       const rating = { high: "High", medium: "Medium", low: "Low" }[ev.rating] || ev.rating;
       const ep = ev.episodes || {};
-      const gap = (ep.gaps || [])[0];
-      const extra = ep.episodes ? ` · <b>${num(ep.episodes)}</b> pieces of linked work` : "";
-      const hint = gap ? `<small class="muted">Add ${esc(gap.name)} to link ${num(gap.records)} more ${gap.id === "ci" ? "commits" : "records"}</small>` : "";
-      host.innerHTML = `<div class="card tv-slim"><span class="pill tv-${esc(ev.rating)}">${esc(rating)}</span><span><b>Training value:</b> about <b>${compact(ev.totals.usable_tokens)}</b> usable tokens of human-written text${extra}${hint ? `<br>${hint}` : ""}</span><button class="btn secondary small" data-tvc="view">View →</button></div>`;
+      text = `<span><b>Next: what it's worth.</b> ${esc(rating)} training value · about ${compact(ev.totals.usable_tokens)} usable tokens${ep.episodes ? ` · ${num(ep.episodes)} pieces of linked work` : ""}</span>`;
     } else {
-      host.innerHTML = `<div class="card tv-slim"><span><b>How much of this is useful for training AI models?</b> <span class="muted">Measured on this computer · ${esc(evaluationEstimate(map))}</span></span><button class="btn primary small" data-tvc="run">Evaluate training value</button></div>`;
+      text = `<span><b>Next: what it's worth.</b> <span class="muted">See what's in your data, how much is useful for training AI models, and how to raise its value.</span></span>`;
     }
-    const view = host.querySelector('[data-tvc="view"]');
-    if (view) view.onclick = () => setTab("training");
-    const run = host.querySelector('[data-tvc="run"]');
-    if (run) run.onclick = () => handlers.onEvaluate && handlers.onEvaluate();
+    host.innerHTML = `<div class="card tv-slim">${text}<button class="btn secondary small" data-tvc="view">Analysis &amp; value →</button></div>`;
+    host.querySelector('[data-tvc="view"]').onclick = () => setTab("training");
   }
 
   window.ScoutMap = { render, bytes, num, esc, renderTraining, renderTvCard, setTab };

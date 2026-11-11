@@ -166,12 +166,17 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
    flagged "Only connected to …". A group is only flagged when it shows
    whose data it is (people, addresses, domains or distinctive names), not
    when it is merely thin.
-3. **Training value**, on its own tab. Under the map, a slim card offers
-   *Evaluate training value*. Pressing it opens a **Training value** tab
-   with live progress, and once results exist the card summarises them
-   ("Medium · about 2.3M usable tokens · View"). The tab disappears again
-   when the data changes. The evaluation itself is a second
-   pass reads every readable document in full, on this computer, and
+3. **Two tabs.** **Inventory** holds everything above: the map and Your
+   platforms (what's collected, the files in each item, duplicates, missing
+   files and unconnected data), ending with a pointer to the second tab.
+   **Analysis & value** holds the training value (with *Evaluate training
+   value*, live progress and *Stop*), linked work and what to add to raise
+   the value, then what's in the data: coverage, activity over time, file
+   formats, languages and the collections table. Housekeeping tips stay on
+   Inventory; value tips stay on Analysis & value.
+
+   **Training value.** The evaluation is a second
+   pass that reads every readable document in full, on this computer, and
    measures its value as training data for AI models.
    - **What counts as a document:** a chat conversation (a Slack
      channel-day, a Teams chat, a Discord channel; 200 messages at most), an
@@ -239,8 +244,6 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
    a short summary, and shows the file to attach. The app itself never
    sends anything. `working-minds evaluate … --report report.md` writes
    the same report.
-4. **Analysis:** collections, coverage, file formats and languages tables,
-   plus activity over time.
 
 ### Create data pack
 
