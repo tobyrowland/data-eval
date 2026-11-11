@@ -968,7 +968,7 @@
     return `<li><b>Add ${esc(g.name)}</b> <span>${what}</span><small class="muted">${esc(g.advice)}</small></li>`;
   }
 
-  /** Work episodes: one piece of work rebuilt across systems. */
+  /** Linked work ("work trajectories"): one piece of work rebuilt across systems. */
   function episodesCard(e) {
     if (!e) return "";
     const gaps = (e.gaps || []).slice(0, 3);
@@ -986,9 +986,9 @@
     return `<div class="card tv-card ep-card">
       <div class="tv-head">
         <div class="tv-headline">
-          <div class="tv-sub">Work episodes</div>
+          <div class="tv-sub">Linked work</div>
           ${head}
-          <p>A work episode joins the records of one piece of work: the conversation about it, the ticket, the code change, the document, and the build that tested it. Records are joined only when they cite the same ticket, pull request, commit, document or email thread. Episodes that show the work done and its result are the most valuable kind of training data.</p>
+          <p>Working Minds joins the records of one piece of work: the conversation about it, the ticket, the code change, the document, and the build that tested it. Records are joined only when they cite the same ticket, pull request, commit, document or email thread. Linked work that shows what was done and how it turned out is the most valuable kind of training data.</p>
         </div>
         ${e.episodes ? `<div class="tv-figures">
           <div><strong>${num(e.complete)}</strong><span>complete: work and its result</span></div>
@@ -997,7 +997,7 @@
           <div><strong>${num(e.multi_system)}</strong><span>across two or more systems</span></div>
         </div>` : ""}
       </div>
-      ${total ? `<div class="ep-bar" aria-label="Episodes by completeness">${seg(e.complete, "c", "Complete")}${seg(e.partial, "p", "Partial")}${seg(e.linked_discussion, "d", "Linked conversations")}</div>
+      ${total ? `<div class="ep-bar" aria-label="Linked work by completeness">${seg(e.complete, "c", "Complete")}${seg(e.partial, "p", "Partial")}${seg(e.linked_discussion, "d", "Linked conversations")}</div>
         <div class="ep-legend muted small"><span><i class="c"></i>Complete</span><span><i class="p"></i>Partial</span><span><i class="d"></i>Linked conversations</span></div>` : ""}
       ${pairs || sources ? `<p class="muted small ep-meta">${pairs ? `Most linked: ${pairs}` : ""}${pairs && sources ? "<br>" : ""}${sources ? `Read: ${sources}` : ""}</p>` : ""}
       ${gaps.length ? `<div class="step-other ep-gaps"><b>Link more of your work</b><ul>${gaps.map(gapLine).join("")}</ul></div>`
@@ -1089,7 +1089,7 @@
       const rating = { high: "High", medium: "Medium", low: "Low" }[ev.rating] || ev.rating;
       const ep = ev.episodes || {};
       const gap = (ep.gaps || [])[0];
-      const extra = ep.episodes ? ` · <b>${num(ep.episodes)}</b> linked work episodes` : "";
+      const extra = ep.episodes ? ` · <b>${num(ep.episodes)}</b> pieces of linked work` : "";
       const hint = gap ? `<small class="muted">Add ${esc(gap.name)} to link ${num(gap.records)} more ${gap.id === "ci" ? "commits" : "records"}</small>` : "";
       host.innerHTML = `<div class="card tv-slim"><span class="pill tv-${esc(ev.rating)}">${esc(rating)}</span><span><b>Training value:</b> about <b>${compact(ev.totals.usable_tokens)}</b> usable tokens of human-written text${extra}${hint ? `<br>${hint}` : ""}</span><button class="btn secondary small" data-tvc="view">View →</button></div>`;
     } else {

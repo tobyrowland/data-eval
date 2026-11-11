@@ -134,7 +134,7 @@ fn one_piece_of_work_across_five_systems_is_one_complete_episode() {
     ] {
         assert!(!out.contains(leak), "leaked {leak}");
     }
-    assert!(md.contains("## Work episodes"));
+    assert!(md.contains("## Work trajectories"));
 }
 
 #[test]

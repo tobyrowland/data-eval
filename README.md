@@ -194,7 +194,8 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
      drawn from the map: missing Slack files, duplicate items, unconnected
      items, code without history, PDFs not evaluated yet, and linked
      platforms not added.
-   - **Work episodes:** records from different systems are joined when
+   - **Linked work** ("work trajectories" in the report; *cases* in process
+     mining): records from different systems are joined when
      they cite the same thing, rebuilding one piece of work: intent (a
      ticket opened), discussion (chat, email), action (a commit, a
      document) and outcome (a CI run, a ticket resolved).
@@ -208,7 +209,7 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
        Google documents and other known services, commit hashes and email
        threads. Exact references only; a key shared by more than 50
        records, or a record citing more than 8, joins nothing.
-     - The owner sees the number of episodes, how complete they are, the
+     - The owner sees how many pieces of linked work there are, how complete they are, the
        systems most often linked, and **what to add next** ("Add Jira:
        4,100 messages mention 1,830 Jira tickets you haven't added").
      - Keys are hashed with a salt chosen for each evaluation and never
@@ -222,11 +223,11 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
    - how to read it, the method and the definitions
    - a summary, and dimension scores out of 100 with their basis and
      weights: volume, uniqueness, human share, pre-LLM share, quality,
-     conversation share, linked work episodes and completeness
+     conversation share, linked work trajectories and completeness
    - the breakdown by platform and kind
    - distributions: usable tokens by year, quality bands, document
      lengths, conversation lengths and languages
-   - work episodes: counts, completeness, linked systems and gaps
+   - work trajectories: counts, completeness, linked systems and gaps
    - the items, gaps and owner decisions
    - the same figures as a JSON appendix
 

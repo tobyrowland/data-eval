@@ -169,11 +169,11 @@ pub fn scores(map: &DataMap, ev: &Evaluation) -> Vec<Score> {
         },
         Score {
             id: "linkage",
-            name: "Linked work episodes",
+            name: "Linked work trajectories",
             score: linkage as u32,
             weight: 0.10,
             basis: format!(
-                "{} episodes ({} complete, {} partial, {} linked discussion); 100 = 10k complete (log scale)",
+                "{} trajectories ({} complete, {} partial, {} linked discussion); 100 = 10k complete (log scale)",
                 compact(e.episodes),
                 compact(e.complete),
                 compact(e.partial),
@@ -425,12 +425,12 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
         let _ = writeln!(md, "| {} | {}% |", l.language, l.share_percent);
     }
 
-    md.push_str("\n## Work episodes\n\n");
-    md.push_str("A work episode is one piece of work rebuilt from several records that cite the same thing: a ticket key, a pull request or commit, a shared document, an email thread. Roles: *intent* (a ticket opened), *discussion* (chat, email), *action* (a commit, a document) and *outcome* (a CI run, a ticket resolved). *Complete* episodes have action, outcome and intent or discussion; they are the most valuable for training agents because they show the goal, the steps across tools and whether it worked. Links are exact references only (no guessing from names or dates); a reference shared by more than 50 records, or a record citing more than 8, does not join records.\n\n");
+    md.push_str("\n## Work trajectories\n\n");
+    md.push_str("A work trajectory is one piece of work rebuilt from several records that cite the same thing (process mining calls this a *case*; the owner's app calls it *linked work*): a ticket key, a pull request or commit, a shared document, an email thread. Roles: *intent* (a ticket opened), *discussion* (chat, email), *action* (a commit, a document) and *outcome* (a CI run, a ticket resolved). *Complete* trajectories have action, outcome and intent or discussion; they are the most valuable for training agents because they show the goal, the steps across tools and whether it worked. Links are exact references only (no guessing from names or dates); a reference shared by more than 50 records, or a record citing more than 8, does not join records.\n\n");
     let e = &ev.episodes;
     let _ = writeln!(md, "| Measure | Value |\n|---|---|");
     for (label, v) in [
-        ("Episodes", e.episodes),
+        ("Trajectories", e.episodes),
         (
             "Complete (action + outcome + intent or discussion)",
             e.complete,
@@ -440,8 +440,8 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
         ("With an outcome", e.with_outcome),
         ("Spanning two or more systems", e.multi_system),
         ("Starting before 2023", e.pre_llm),
-        ("Records in episodes", e.records_linked),
-        ("Tokens in episodes", e.tokens),
+        ("Records in trajectories", e.records_linked),
+        ("Tokens in trajectories", e.tokens),
         (
             "Groups too large to be one piece of work (not counted)",
             e.clusters,
@@ -462,18 +462,18 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
     }
     let _ = writeln!(
         md,
-        "\nEpisodes by records: 2: {}, 3–5: {}, 6–20: {}, 21+: {}.",
+        "\nTrajectories by records: 2: {}, 3–5: {}, 6–20: {}, 21+: {}.",
         e.by_size[0], e.by_size[1], e.by_size[2], e.by_size[3]
     );
     if !e.system_pairs.is_empty() {
-        md.push_str("\n| Systems linked | Episodes |\n|---|---|\n");
+        md.push_str("\n| Systems linked | Trajectories |\n|---|---|\n");
         for p in &e.system_pairs {
             let _ = writeln!(md, "| {} ↔ {} | {} |", p.a_name, p.b_name, p.episodes);
         }
     }
     if !e.systems.is_empty() {
         md.push_str(
-            "\n| System | Records citing or cited | Of which in episodes |\n|---|---|---|\n",
+            "\n| System | Records citing or cited | Of which in trajectories |\n|---|---|---|\n",
         );
         for s in &e.systems {
             let _ = writeln!(md, "| {} | {} | {} |", s.name, s.records, s.linked);

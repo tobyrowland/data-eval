@@ -132,7 +132,7 @@ fn main() -> ExitCode {
         }
         let e = &ev.episodes;
         println!(
-            "Work episodes: {} ({} complete, {} partial, {} linked conversations) · {} commits · {} tickets · {} CI logs",
+            "Linked work: {} ({} complete, {} partial, {} linked conversations) · {} commits · {} tickets · {} CI logs",
             e.episodes, e.complete, e.partial, e.linked_discussion, e.commits, e.tickets, e.ci_logs
         );
         for g in &e.gaps {
