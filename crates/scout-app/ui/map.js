@@ -296,6 +296,12 @@
         ${collectionsTable()}
       </section>
 
+      <section class="section reveal" style="animation-delay:320ms">
+        <div class="section-head"><div><h2>Files by format</h2><p>What kinds of files you added, and how much of each we could read. Every file is counted, including those we can't read yet.</p></div></div>
+        ${formatsCard()}
+        ${coverageCard()}
+      </section>
+
       <div id="tv-card" class="reveal" style="animation-delay:350ms"></div>
       </div>
       <div class="tab-pane" data-pane="training" ${activeTab === "training" ? "" : "hidden"}>
@@ -305,12 +311,8 @@
         </div>
         <div id="training-value"></div>
         <section class="section">
-          <div class="section-head"><div><h2>What's in your data</h2><p>Measured on this computer. Every file is counted, including those we can't read yet.</p></div></div>
-          <div class="grid-2">
-            ${coverageCard()}
-            ${T ? `<div class="card panel-card"><div class="card-head"><div><h3>Activity over time</h3><p>Message records per month, from timestamps inside your exports</p></div></div><div id="tl-host">${T.svg}</div></div>` : formatsCard()}
-          </div>
-          ${T ? formatsCard() : ""}
+          <div class="section-head"><div><h2>What's in the content</h2><p>When it was written and in which languages, measured on this computer.</p></div></div>
+          ${T ? `<div class="card panel-card"><div class="card-head"><div><h3>Activity over time</h3><p>Message records per month, from timestamps inside your exports</p></div></div><div id="tl-host">${T.svg}</div></div>` : ""}
           ${languagesBlock()}
         </section>
       </div>
