@@ -708,3 +708,5 @@ body.dragging .drag-veil-card { transform: scale(1); }
 .lw-ok { text-align: center; }
 .lw-miss { color: #B45309; font-weight: 600; }
 @media (max-width: 760px) { .lw-head { grid-template-columns: 1fr; } }
+.lw-test { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.lw-test small { flex: 1; min-width: 220px; }

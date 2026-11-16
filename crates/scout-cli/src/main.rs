@@ -19,6 +19,7 @@ Usage:
   working-minds scan <file-or-folder>... [--exclude <path>]... [--json <out.json>]
   working-minds pack <file-or-folder>... --out <folder> [--exclude <path>]...
   working-minds evaluate <file-or-folder>... [--exclude <path>]... [--json <out.json>] [--report <out.md>]
+  working-minds test-jira <file-or-folder>... --out <fake-jira.csv>
 
   pack copies everything into one new folder with standard names (Slack/,
   Google Drive/, Google Mail/, Email/, Code/<repo>/, Documents/, Other/),
@@ -48,7 +49,8 @@ fn main() -> ExitCode {
     }
     let packing = args[0] == "pack";
     let evaluating = args[0] == "evaluate";
-    if args[0] != "scan" && !packing && !evaluating {
+    let test_jira = args[0] == "test-jira";
+    if args[0] != "scan" && !packing && !evaluating && !test_jira {
         eprintln!("Unknown command '{}'.\n\n{USAGE}", args[0]);
         return ExitCode::from(2);
     }
@@ -92,6 +94,25 @@ fn main() -> ExitCode {
     }
 
     eprintln!("Working on your computer. Nothing is being uploaded.");
+    if test_jira {
+        // Fake Jira data for the tickets these files mention, for testing.
+        let Some(out) = pack_out else {
+            return usage_error("test-jira needs --out <file.csv>");
+        };
+        let mentions =
+            scout_core::evaluate::ticket_mentions(inputs, opts.exclude, None, &mut |_| {});
+        let csv = scout_core::evaluate::testdata::test_jira_csv(&mentions);
+        if let Err(e) = std::fs::write(&out, csv) {
+            eprintln!("Could not save {}: {e}", out.display());
+            return ExitCode::FAILURE;
+        }
+        eprintln!(
+            "Wrote {} fake tickets to {} (marked as Working Minds test data).",
+            mentions.len(),
+            out.display()
+        );
+        return ExitCode::SUCCESS;
+    }
     let inventory = scan(&inputs, opts);
     if evaluating {
         let started = std::time::Instant::now();

@@ -183,3 +183,45 @@ fn without_results_nothing_is_complete_and_the_gaps_say_what_would_complete_it()
     assert_eq!(e.shapes[0].episodes, 1);
     assert!(e.shapes[0].why && e.shapes[0].action && !e.shapes[0].outcome);
 }
+
+#[test]
+fn test_jira_data_from_the_owners_own_mentions_completes_linked_work_and_is_flagged() {
+    let inv = fixture("episodes-testjira", false, false);
+    let inputs: Vec<_> = inv.collections.iter().map(|c| c.source.clone()).collect();
+    let mentions = scout_core::evaluate::ticket_mentions(inputs.clone(), vec![], None, &mut |_| {});
+    let keys: Vec<&str> = mentions.iter().map(|m| m.key.as_str()).collect();
+    // Most mentioned first: BUG-812 (Slack thread, email, commit), then the others.
+    assert_eq!(keys, vec!["BUG-812", "BUG-901", "BUG-902"], "{mentions:?}");
+    let bug = &mentions[0];
+    assert!(
+        bug.mentions >= 3 && bug.systems.contains(&"slack") && bug.systems.contains(&"email"),
+        "{bug:?}"
+    );
+    assert!(bug.first.is_some() && bug.last >= bug.first);
+    let csv = scout_core::evaluate::testdata::test_jira_csv(&mentions);
+    let out = tempdir("episodes-testjira-out");
+    let file = write(&out, "test-jira.csv", csv.as_bytes());
+    let mut with = inputs;
+    with.push(file);
+    let inv2 = scan(&with, ScanOptions::default());
+    let ev = evaluate(&inv2, None, &mut |_| {});
+    let e = &ev.episodes;
+    assert_eq!((e.tickets, e.test_tickets), (3, 3));
+    // Jira no longer a gap; BUG-812 joins the work as its request (and its
+    // result, if the test ticket came out resolved).
+    assert!(e.gaps.iter().all(|g| g.id != "jira"), "{:?}", e.gaps);
+    let done = csv
+        .lines()
+        .any(|l| l.contains(",BUG-812,") && l.contains(",Done,"));
+    assert_eq!(e.complete, u64::from(done), "{e:#?}");
+    // The report says loudly that it contains test data.
+    let md = scout_core::evaluate::wm_report::wm_report(
+        &scout_core::build_data_map(&inv2),
+        &ev,
+        None,
+        &json!({}),
+    );
+    assert!(md.contains("TEST DATA"), "report must flag test data");
+    // Normal evaluations keep no ticket text.
+    assert!(!serde_json::to_string(&ev).unwrap().contains("BUG-812"));
+}

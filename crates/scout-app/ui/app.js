@@ -290,6 +290,29 @@
       toast("The evaluation could not finish: " + err);
     }
   }
+  // Fake Jira data from the tickets the owner's data mentions (testing).
+  async function makeTestJira(map) {
+    if (evalState.running || assessing) return;
+    evalState.running = true;
+    evalState.progress = null;
+    await showMap(currentMap || map);
+    window.ScoutMap.setTab("work");
+    try {
+      const r = await invoke("make_test_jira");
+      evalState.running = false;
+      await showMap(currentMap || map);
+      window.ScoutMap.setTab("work");
+      toast(`Created ${num(r.tickets)} fake Jira tickets (test data) in Documents › Working Minds.`, {
+        label: "Add it and find linked work",
+        run: async () => { await addToMap([r.path]); runEvaluation(currentMap); },
+      });
+    } catch (err) {
+      evalState.running = false;
+      await showMap(currentMap || map);
+      toast(String(err));
+    }
+  }
+
   listen("scout://evaluate", (e) => {
     if (!evalState.running) return;
     evalState.progress = e.payload;
@@ -315,6 +338,7 @@
       <p>Measurements only, written so Working Minds can review them with an AI model. Sending opens your own email program addressed to <b>${esc(preview.email)}</b> and saves the report in Documents › Working Minds for you to attach.</p>
       <div class="guide-callout"><b>Contains:</b> company name, the names of items you added, and counts, scores and distributions.<br><b>Never contains:</b> messages, documents, email text, email addresses, people's names or file paths.</div>
       <div class="report-preview-head"><span class="muted small">Preview · ${num(Math.round(preview.bytes / 1024))} KB</span></div>
+      ${preview.markdown.includes("**TEST DATA:**") ? `<div class="guide-callout warn"><b>This report includes fake test tickets.</b> Remove the "Working Minds TEST Jira export" item and find linked work again before sending it.</div>` : ""}
       <pre class="report-preview">${esc(preview.markdown)}</pre>
       <div class="actions-row report-actions"><button class="btn ghost" id="report-copy">Copy report</button><div><button class="btn secondary" id="report-save">Save file only</button> <button class="btn primary" id="report-send">Open email to Working Minds</button></div></div>`;
     $("report-panel").setAttribute("aria-hidden", "false");
@@ -361,6 +385,7 @@
       onPlan: (p) => invoke("set_source_plan", { plan: p }).catch((e) => toast("Could not save your list: " + e)),
       files: fileHandlers,
       onEvaluate: () => runEvaluation(map),
+      onMakeTestJira: () => makeTestJira(map),
       onStopEvaluate: () => invoke("stop"),
       onSendReport: () => openReport(),
     }, { banner, plan, linkCounts, removedItems, evaluation, evaluating: evalState.running ? evalState : null });

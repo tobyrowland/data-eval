@@ -37,6 +37,9 @@ pub struct Found {
     tickets: Vec<(u64, u64)>,
     /// Ticket prefixes seen in a ticket tracker's own link.
     confirmed: Vec<(u64, &'static str)>,
+    /// The tickets' plain keys (prefix, key hash, key), kept only in
+    /// capture mode, for generating test data on this computer.
+    ticket_text: Vec<(u64, u64, String)>,
 }
 
 impl Found {
@@ -47,6 +50,7 @@ impl Found {
         self.refs.extend(o.refs);
         self.tickets.extend(o.tickets);
         self.confirmed.extend(o.confirmed);
+        self.ticket_text.extend(o.ticket_text);
     }
 }
 
@@ -55,6 +59,8 @@ struct Rec {
     system: &'static str,
     roles: u8,
     year: Option<i32>,
+    /// When the record happened (unix seconds), if known.
+    time: Option<i64>,
     tokens: u64,
     refs: Vec<u64>,
     tickets: Vec<(u64, u64)>,
@@ -74,6 +80,48 @@ pub struct Links {
     ci_logs: u64,
     commits: u64,
     tickets: u64,
+    test_tickets: u64,
+    /// Keep the plain ticket keys mentioned, to generate test data locally
+    /// (off for normal evaluations: then only hashes are kept).
+    pub capture_tickets: bool,
+    mentions: HashMap<u64, TicketMention>,
+}
+
+/// A ticket key mentioned in the owner's data (capture mode only; never
+/// part of an evaluation's output).
+#[derive(Debug, Clone)]
+pub struct TicketMention {
+    pub key: String,
+    prefix: u64,
+    pub mentions: u32,
+    /// First and last mention (unix seconds), when the records had a time.
+    pub first: Option<i64>,
+    pub last: Option<i64>,
+    pub systems: Vec<&'static str>,
+    /// Mentions known only by year (middle of that year), used when no
+    /// mention has an exact time.
+    approx: Option<(i64, i64)>,
+}
+
+impl TicketMention {
+    #[doc(hidden)]
+    pub fn for_test(
+        key: &str,
+        mentions: u32,
+        first: Option<i64>,
+        last: Option<i64>,
+        systems: Vec<&'static str>,
+    ) -> Self {
+        TicketMention {
+            key: key.to_string(),
+            prefix: 0,
+            mentions,
+            first,
+            last,
+            systems,
+            approx: None,
+        }
+    }
 }
 
 impl Default for Links {
@@ -89,6 +137,9 @@ impl Default for Links {
             ci_logs: 0,
             commits: 0,
             tickets: 0,
+            test_tickets: 0,
+            capture_tickets: false,
+            mentions: HashMap::new(),
         }
     }
 }
@@ -136,12 +187,19 @@ impl Links {
         r.tokens += tokens;
     }
 
+    /// When a record happened; the earliest time is kept.
+    pub fn time(&mut self, unit: u64, t: Option<i64>) {
+        if let (Some(r), Some(t)) = (self.units.get_mut(&unit), t) {
+            r.time = Some(r.time.map_or(t, |x: i64| x.min(t)));
+        }
+    }
+
     pub fn has(&self, unit: u64) -> bool {
         self.units.contains_key(&unit)
     }
 
     /// Adds the keys found in a text to a record (which must exist).
-    pub fn add_found(&mut self, unit: u64, f: Found) {
+    pub fn add_found(&mut self, unit: u64, mut f: Found) {
         for (p, sys) in &f.confirmed {
             self.prefix_system.insert(*p, sys);
             let n = self.prefix_numbers.entry(*p).or_default();
@@ -157,6 +215,34 @@ impl Links {
         }
         for (k, sys) in &f.refs {
             self.key_system.entry(*k).or_insert(sys);
+        }
+        if self.capture_tickets && !f.ticket_text.is_empty() {
+            let (system, exact, mid_year) = self.units.get(&unit).map_or(("", None, None), |r| {
+                // Without an exact time, the middle of the record's year.
+                let mid_year = r.year.map(|y| days_from_civil(y as i64, 7, 1) * 86_400);
+                (r.system, r.time, mid_year)
+            });
+            for (p, k, key) in std::mem::take(&mut f.ticket_text) {
+                let m = self.mentions.entry(k).or_insert_with(|| TicketMention {
+                    key,
+                    prefix: p,
+                    mentions: 0,
+                    first: None,
+                    last: None,
+                    systems: Vec::new(),
+                    approx: None,
+                });
+                m.mentions += 1;
+                if let Some(t) = exact {
+                    m.first = Some(m.first.map_or(t, |x| x.min(t)));
+                    m.last = Some(m.last.map_or(t, |x| x.max(t)));
+                } else if let Some(t) = mid_year {
+                    m.approx = Some(m.approx.map_or((t, t), |(a, b)| (a.min(t), b.max(t))));
+                }
+                if !system.is_empty() && !m.systems.contains(&system) {
+                    m.systems.push(system);
+                }
+            }
         }
         if let Some(r) = self.units.get_mut(&unit) {
             for (k, _) in f.refs {
@@ -214,6 +300,31 @@ impl Links {
     pub fn note_ticket(&mut self) {
         self.tickets += 1;
     }
+    /// A ticket row marked as Working Minds test data.
+    pub fn note_test_ticket(&mut self) {
+        self.test_tickets += 1;
+    }
+
+    /// The ticket keys mentioned (capture mode), for real ticket projects
+    /// only, most mentioned first.
+    pub fn take_mentions(&mut self) -> Vec<TicketMention> {
+        let real = |p: &u64| self.prefix_numbers.get(p).is_some_and(|n| n.len() >= 3);
+        let mut v: Vec<TicketMention> = std::mem::take(&mut self.mentions)
+            .into_values()
+            .filter(|m| real(&m.prefix))
+            .map(|mut m| {
+                if m.first.is_none() {
+                    if let Some((a, b)) = m.approx {
+                        m.first = Some(a);
+                        m.last = Some(b);
+                    }
+                }
+                m
+            })
+            .collect();
+        v.sort_by(|a, b| b.mentions.cmp(&a.mentions).then(a.key.cmp(&b.key)));
+        v
+    }
     pub fn note_ci(&mut self, passed: Option<bool>) {
         self.ci_logs += 1;
         match passed {
@@ -252,8 +363,11 @@ impl Links {
                     _ => {}
                 }
                 let key = format!("{prefix}-{}", &m[2]);
-                f.tickets
-                    .push((self.hash(&["tp", prefix]), self.hash(&["t", &key])));
+                let (p, k) = (self.hash(&["tp", prefix]), self.hash(&["t", &key]));
+                f.tickets.push((p, k));
+                if self.capture_tickets {
+                    f.ticket_text.push((p, k, key));
+                }
             }
         }
         f
@@ -310,6 +424,9 @@ impl Links {
                     let p = self.hash(&["tp", prefix]);
                     f.confirmed.push((p, system));
                     f.tickets.push((p, self.hash(&["t", k])));
+                    if self.capture_tickets {
+                        f.ticket_text.push((p, self.hash(&["t", k]), k.to_string()));
+                    }
                 }
             }
             "google_drive" => {
@@ -375,6 +492,7 @@ impl Links {
             ci_logs,
             commits,
             tickets,
+            test_tickets,
             ..
         } = self;
         let mut key_system = key_system;
@@ -445,6 +563,7 @@ impl Links {
             ci_failed,
             commits,
             tickets,
+            test_tickets,
             ..Default::default()
         };
         let mut pairs: BTreeMap<(&'static str, &'static str), u64> = BTreeMap::new();
@@ -640,6 +759,17 @@ impl Links {
 /// Per missing system: records citing it, keys cited, pieces of work it
 /// would complete, pieces it would add.
 type GapTally = (HashSet<usize>, HashSet<u64>, u64, u64);
+
+/// Days since 1970-01-01 for a calendar date (proleptic Gregorian).
+pub fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
 
 fn is_git_system(s: &str) -> bool {
     matches!(s, "github" | "bitbucket" | "gitlab" | "git")
@@ -902,6 +1032,9 @@ pub struct Episodes {
     pub gaps: Vec<Gap>,
     pub commits: u64,
     pub tickets: u64,
+    /// Ticket rows marked as Working Minds test data (fake): if any, the
+    /// owner must remove that file before sending a report.
+    pub test_tickets: u64,
     pub ci_logs: u64,
     pub ci_passed: u64,
     pub ci_failed: u64,
