@@ -49,10 +49,13 @@
     if (c.teams) return { badge: "T", color: "#5059C9", kind: "Microsoft Teams export" };
     if ((c.platforms || []).includes("teams")) return { badge: "↓", color: "#5059C9", kind: "Teams linked files" };
     if (c.discord) return { badge: "D", color: "#5865F2", kind: c.discord.own_messages_only ? "Discord data package" : "Discord channel export" };
+    // A repository folder can also hold Slack files: it stays a repository,
+    // with the matched files noted.
+    const alsoMatched = attachTargets.get(c.label);
+    if ((c.display_label || "").endsWith("(Git repository)")) return { badge: "‹›", color: "#5E6E84", kind: "Git repository", alsoMatched };
+    if ((c.display_label || "").endsWith("(code download)")) return { badge: "‹›", color: "#5E6E84", kind: "Code download", alsoMatched };
     if (attachTargets.has(c.label)) return { badge: "↓", color: "#22A094", kind: "Slack attachments", matched: attachTargets.get(c.label) };
     if ((c.display_label || "").startsWith("Google Takeout")) return { badge: "G", color: "#2F6FB0", kind: "Google Takeout" };
-    if ((c.display_label || "").endsWith("(Git repository)")) return { badge: "‹›", color: "#5E6E84", kind: "Git repository" };
-    if ((c.display_label || "").endsWith("(code download)")) return { badge: "‹›", color: "#5E6E84", kind: "Code download" };
     const cat = dominantCategory(c);
     if (cat === "Email") return { badge: "@", color: CAT.Email, kind: "Email archive" };
     if ((c.formats || []).length === 1 && c.logical_files === 1) {
@@ -288,7 +291,12 @@
         <div id="next-steps"></div>
       </section>
 
-      <div id="tv-card" class="reveal" style="animation-delay:300ms"></div>
+      <section class="section reveal" style="animation-delay:300ms">
+        <div class="section-head"><div><h2>All items</h2><p>One row per file, folder or export you added.</p></div></div>
+        ${collectionsTable()}
+      </section>
+
+      <div id="tv-card" class="reveal" style="animation-delay:350ms"></div>
       </div>
       <div class="tab-pane" data-pane="training" ${activeTab === "training" ? "" : "hidden"}>
         <div class="section-head tv-pane-head">
@@ -304,7 +312,6 @@
           </div>
           ${T ? formatsCard() : ""}
           ${languagesBlock()}
-          ${collectionsTable()}
         </section>
       </div>
       <div class="privacy-foot reveal" style="animation-delay:600ms"><span class="status-dot"></span>${esc(map.privacy.statement)}</div>
@@ -331,12 +338,12 @@
           <td class="num">${records ? num(records) : "—"}</td>
           <td class="num">${bytes(c.expanded_bytes)}</td>
           <td>${c.date_coverage ? `${esc(c.date_coverage.first)} → ${esc(c.date_coverage.last)}` : `<span class="muted">—</span>`}</td>
-          <td class="num">${info.matched != null ? `${num(info.matched)} matched` : `${meter(p)}${p}%`}</td>
+          <td class="num">${info.matched != null ? `${num(info.matched)} matched` : `${meter(p)}${p}%${info.alsoMatched ? `<br><small class="muted">${num(info.alsoMatched)} Slack files matched</small>` : ""}`}</td>
         </tr>`;
       }).join("");
-      return `<div class="card table-card"><div class="card-head"><div><h3>Collections</h3><p>One row per file, folder or export you added</p></div></div>
+      return `<div class="card table-card">
         <div class="tbl-wrap"><table class="tbl">
-          <thead><tr><th>Collection</th><th>Type</th><th class="num">Files</th><th class="num">Records</th><th class="num">Size</th><th>Dates in content</th><th class="num">Examined</th></tr></thead>
+          <thead><tr><th>Item</th><th>Type</th><th class="num">Files</th><th class="num">Records</th><th class="num">Size</th><th>Dates in content</th><th class="num">Examined</th></tr></thead>
           <tbody>${rows}</tbody>
           <tfoot><tr><td><b>Total</b></td><td></td><td class="num">${num(t.logical_files)}</td><td class="num">${num(t.structured_records)}</td><td class="num">${bytes(t.expanded_bytes)}</td><td>${esc(sp.note)}</td><td class="num">${pct}%</td></tr></tfoot>
         </table></div></div>`;
