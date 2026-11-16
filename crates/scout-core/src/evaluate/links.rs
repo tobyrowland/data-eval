@@ -452,18 +452,42 @@ impl Links {
         for r in &recs {
             per_system.entry(r.system).or_default().0 += 1;
         }
-        for members in groups.values() {
-            if members.len() < 2 {
-                continue;
+        // Systems referenced but not uploaded, and which keys point there.
+        let present: HashSet<&'static str> = recs.iter().map(|r| r.system).collect();
+        let present_git = present.iter().any(|s| is_git_system(s));
+        let gap_of = |k: &u64| -> Option<&'static str> {
+            if owned.contains(k) {
+                return None;
             }
+            let sys = key_system.get(k).copied().unwrap_or("jira");
+            let missing = if is_git_system(sys) {
+                !present_git
+            } else {
+                !present.contains(sys)
+            };
+            (missing && !NO_GAP.contains(&sys)).then_some(sys)
+        };
+        let ci_gap = commits > 0 && ci_logs == 0;
+        // Per gap: (records, keys, pieces it would complete, pieces it would add).
+        let mut gap_stats: BTreeMap<&'static str, GapTally> = BTreeMap::new();
+        let mut shapes: BTreeMap<(Vec<&'static str>, u8), u64> = BTreeMap::new();
+        let complete_with = |roles: u8| {
+            let has = |r: Role| roles & r as u8 != 0;
+            has(Role::Action) && has(Role::Outcome) && (has(Role::Intent) || has(Role::Discussion))
+        };
+        for members in groups.values() {
             if members.len() > CLUSTER {
-                out.clusters += 1;
+                if members.len() >= 2 {
+                    out.clusters += 1;
+                }
                 continue;
             }
             let mut roles = 0u8;
             let mut systems: Vec<&'static str> = Vec::new();
             let mut tokens = 0u64;
             let mut first_year: Option<i32> = None;
+            let mut has_commit = false;
+            let mut touched: BTreeMap<&'static str, ()> = BTreeMap::new();
             for &i in members {
                 let r = &recs[i];
                 roles |= r.roles;
@@ -474,9 +498,40 @@ impl Links {
                 if let Some(y) = r.year {
                     first_year = Some(first_year.map_or(y, |f| f.min(y)));
                 }
+                has_commit |= is_git_system(r.system) && r.roles & Role::Action as u8 != 0;
+                for k in &r.refs {
+                    if let Some(sys) = gap_of(k) {
+                        // A hub (a page cited everywhere) still shows the
+                        // gap, but says nothing about this piece of work.
+                        if !users.get(k).is_some_and(|u| u.len() > HUB) {
+                            touched.insert(sys, ());
+                        }
+                        let g = gap_stats.entry(sys).or_default();
+                        g.0.insert(i);
+                        g.1.insert(*k);
+                    }
+                }
             }
             let role_count = roles.count_ones();
-            if systems.len() < 2 && role_count < 2 {
+            let is_episode = members.len() >= 2 && (systems.len() >= 2 || role_count >= 2);
+            let complete = is_episode && complete_with(roles);
+            // What each missing system would do for this group.
+            let mut gains: Vec<(&'static str, u8)> =
+                touched.keys().map(|s| (*s, gap_role(s))).collect();
+            if ci_gap && has_commit {
+                gains.push(("ci", Role::Outcome as u8));
+            }
+            for (sys, add) in gains {
+                let g = gap_stats.entry(sys).or_default();
+                let new_roles = roles | add;
+                if !complete && complete_with(new_roles) {
+                    g.2 += 1;
+                }
+                if !is_episode {
+                    g.3 += 1;
+                }
+            }
+            if !is_episode {
                 continue;
             }
             out.episodes += 1;
@@ -486,15 +541,18 @@ impl Links {
                 per_system.entry(recs[i].system).or_default().1 += 1;
             }
             let has = |r: Role| roles & r as u8 != 0;
-            if has(Role::Action)
-                && has(Role::Outcome)
-                && (has(Role::Intent) || has(Role::Discussion))
-            {
+            if complete {
                 out.complete += 1;
             } else if role_count >= 2 {
                 out.partial += 1;
             } else {
                 out.linked_discussion += 1;
+            }
+            if has(Role::Intent) || has(Role::Discussion) {
+                out.with_why += 1;
+            }
+            if has(Role::Action) {
+                out.with_action += 1;
             }
             if has(Role::Outcome) {
                 out.with_outcome += 1;
@@ -518,6 +576,7 @@ impl Links {
                     *pairs.entry((x, y)).or_default() += 1;
                 }
             }
+            *shapes.entry((systems.clone(), roles)).or_default() += 1;
         }
         let mut pairs: Vec<SystemPair> = pairs
             .into_iter()
@@ -532,6 +591,19 @@ impl Links {
         pairs.sort_by(|x, y| y.episodes.cmp(&x.episodes).then(x.a.cmp(y.a)));
         pairs.truncate(10);
         out.system_pairs = pairs;
+        let mut shapes: Vec<Shape> = shapes
+            .into_iter()
+            .map(|((systems, roles), n)| Shape {
+                systems: systems.iter().map(|s| system_name(s)).collect(),
+                why: roles & (Role::Intent as u8 | Role::Discussion as u8) != 0,
+                action: roles & Role::Action as u8 != 0,
+                outcome: roles & Role::Outcome as u8 != 0,
+                episodes: n,
+            })
+            .collect();
+        shapes.sort_by(|a, b| b.episodes.cmp(&a.episodes).then(a.systems.cmp(&b.systems)));
+        shapes.truncate(5);
+        out.shapes = shapes;
         out.systems = per_system
             .iter()
             .map(|(id, (records, linked))| SystemCount {
@@ -541,55 +613,66 @@ impl Links {
                 linked: *linked,
             })
             .collect();
-        // Gaps: keys pointing at a system with no records at all.
-        let present: HashSet<&'static str> = recs.iter().map(|r| r.system).collect();
-        let present_git = present
-            .iter()
-            .any(|s| matches!(*s, "github" | "bitbucket" | "gitlab" | "git"));
-        let mut gap_records: BTreeMap<&'static str, (HashSet<usize>, HashSet<u64>)> =
-            BTreeMap::new();
-        for (i, r) in recs.iter().enumerate() {
-            for k in &r.refs {
-                if owned.contains(k) {
-                    continue;
-                }
-                let sys = key_system.get(k).copied().unwrap_or("jira");
-                let missing = if matches!(sys, "github" | "bitbucket" | "gitlab" | "git") {
-                    !present_git
-                } else {
-                    !present.contains(sys)
-                };
-                if !missing || NO_GAP.contains(&sys) {
-                    continue;
-                }
-                let g = gap_records.entry(sys).or_default();
-                g.0.insert(i);
-                g.1.insert(*k);
-            }
-        }
-        let mut gaps: Vec<Gap> = gap_records
+        let mut gaps: Vec<Gap> = gap_stats
             .into_iter()
-            .map(|(id, (rs, ks))| Gap {
+            .map(|(id, (rs, ks, completes, adds))| Gap {
                 id,
                 name: system_name(id),
-                records: rs.len() as u64,
+                records: if id == "ci" { commits } else { rs.len() as u64 },
                 distinct_targets: ks.len() as u64,
+                would_complete: completes,
+                would_add: adds,
+                adds: role_names(gap_role(id)),
                 advice: advice(id),
             })
             .collect();
-        if commits > 0 && ci_logs == 0 {
-            gaps.push(Gap {
-                id: "ci",
-                name: system_name("ci"),
-                records: commits,
-                distinct_targets: 0,
-                advice: advice("ci"),
-            });
-        }
-        gaps.sort_by(|a, b| b.records.cmp(&a.records).then(a.id.cmp(b.id)));
+        // Most pieces completed first, then most added, then most records.
+        gaps.sort_by(|a, b| {
+            (b.would_complete, b.would_add, b.records)
+                .cmp(&(a.would_complete, a.would_add, a.records))
+                .then(a.id.cmp(b.id))
+        });
         out.gaps = gaps;
         out
     }
+}
+
+/// Per missing system: records citing it, keys cited, pieces of work it
+/// would complete, pieces it would add.
+type GapTally = (HashSet<usize>, HashSet<u64>, u64, u64);
+
+fn is_git_system(s: &str) -> bool {
+    matches!(s, "github" | "bitbucket" | "gitlab" | "git")
+}
+
+/// The part of a piece of work a missing system would add: a ticket
+/// tracker the request and (once resolved) the result, a repository the
+/// code change, CI logs the result, documents the work, meetings the talk.
+fn gap_role(sys: &str) -> u8 {
+    match sys {
+        "jira" | "linear" | "asana" | "trello" | "zendesk" | "intercom" => {
+            Role::Intent as u8 | Role::Outcome as u8
+        }
+        "ci" | "circleci" | "sentry" | "datadog" | "pagerduty" => Role::Outcome as u8,
+        s if is_git_system(s) => Role::Action as u8,
+        "google_drive" | "confluence" | "notion" | "dropbox" | "box" | "figma" | "miro"
+        | "microsoft365" | "airtable" => Role::Action as u8,
+        _ => Role::Discussion as u8,
+    }
+}
+
+fn role_names(roles: u8) -> Vec<&'static str> {
+    let mut v = Vec::new();
+    if roles & (Role::Intent as u8 | Role::Discussion as u8) != 0 {
+        v.push("why");
+    }
+    if roles & Role::Action as u8 != 0 {
+        v.push("what was done");
+    }
+    if roles & Role::Outcome as u8 != 0 {
+        v.push("how it turned out");
+    }
+    v
 }
 
 /// Systems that are never suggested as gaps (no export gives them).
@@ -677,7 +760,11 @@ pub struct CiLog {
 /// Recognises a CI log (GitHub Actions, GitLab, Jenkins, Bitbucket
 /// Pipelines) and reads whether it passed and which commit it built.
 pub fn ci_log(text: &str) -> Option<CiLog> {
-    let head = &text[..text.len().min(64 * 1024)];
+    let mut cut = text.len().min(64 * 1024);
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let head = &text[..cut];
     let gha = head.contains("##[") && gha_ts_re().is_match(head);
     let gitlab = head.contains("Running with gitlab-runner");
     let jenkins = head.contains("Started by ") && text.contains("Finished: ");
@@ -793,6 +880,11 @@ pub struct Episodes {
     pub partial: u64,
     /// Linked conversations in several systems, no work recorded.
     pub linked_discussion: u64,
+    /// Episodes with a request or discussion (why).
+    pub with_why: u64,
+    /// Episodes with work done (a commit, a document).
+    pub with_action: u64,
+    /// Episodes with a result (a CI run, a ticket resolved).
     pub with_outcome: u64,
     pub multi_system: u64,
     pub pre_llm: u64,
@@ -803,6 +895,8 @@ pub struct Episodes {
     /// Groups too large to be one piece of work (not counted as episodes).
     pub clusters: u64,
     pub system_pairs: Vec<SystemPair>,
+    /// The most common kinds of episode: systems and parts present.
+    pub shapes: Vec<Shape>,
     pub systems: Vec<SystemCount>,
     /// Missing systems that would link records, most first.
     pub gaps: Vec<Gap>,
@@ -819,6 +913,15 @@ pub struct SystemPair {
     pub b: &'static str,
     pub a_name: String,
     pub b_name: String,
+    pub episodes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Shape {
+    pub systems: Vec<String>,
+    pub why: bool,
+    pub action: bool,
+    pub outcome: bool,
     pub episodes: u64,
 }
 
@@ -840,6 +943,13 @@ pub struct Gap {
     pub records: u64,
     /// Distinct tickets, pages or commits they point to.
     pub distinct_targets: u64,
+    /// Existing pieces of work it would complete (if the cited items are
+    /// in the export and, for tickets, resolved): an upper estimate.
+    pub would_complete: u64,
+    /// Records or groups that would become new pieces of linked work.
+    pub would_add: u64,
+    /// The parts it adds: "why", "what was done", "how it turned out".
+    pub adds: Vec<&'static str>,
     pub advice: String,
 }
 
@@ -881,5 +991,8 @@ mod tests {
         assert_eq!(c.shas, vec!["1a2b3c4d"]);
         assert_eq!(c.year, Some(2024));
         assert!(ci_log("just some notes about ##[ things").is_none());
+        // A long text with a multi-byte character across the 64 KB mark.
+        let long = format!("{}é{}", "a".repeat(64 * 1024 - 1), "b".repeat(10));
+        assert!(ci_log(&long).is_none());
     }
 }

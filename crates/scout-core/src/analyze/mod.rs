@@ -2,6 +2,7 @@
 //! never executes content and never follows links.
 
 pub mod discord;
+pub mod docs;
 pub mod fingerprint;
 pub mod language;
 pub mod slack;

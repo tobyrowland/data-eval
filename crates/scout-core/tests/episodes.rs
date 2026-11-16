@@ -44,7 +44,7 @@ fn slack(thread_text: &[&str], extra: &[serde_json::Value]) -> Vec<u8> {
     ])
 }
 
-fn fixture(name: &str, with_jira: bool) -> scout_core::Inventory {
+fn fixture(name: &str, with_jira: bool, with_ci: bool) -> scout_core::Inventory {
     let d = tempdir(name);
     let fix = repo(&d);
     // Other tickets mentioned in passing (so BUG is a real project even
@@ -75,11 +75,14 @@ fn fixture(name: &str, with_jira: bool) -> scout_core::Inventory {
     if with_jira {
         write(&d, "jira.csv", b"Summary,Issue key,Issue Type,Status,Created,Resolved,Description\n\"Export fails on empty region\",BUG-812,Bug,Done,2021-03-01 10:00,2021-03-03 16:00,\"The CSV export throws when a customer has no region set.\"\nOther bug,BUG-813,Bug,Open,2021-03-04 10:00,,Something else entirely\nThird bug,BUG-814,Bug,Open,2021-03-05 10:00,,Yet another unrelated problem\n");
     }
-    write(
+    std::fs::create_dir_all(d.join("ci")).unwrap();
+    if with_ci {
+        write(
         &d,
         "ci/build_1.txt",
         format!("2021-03-02T10:05:00.0000000Z ##[group]Run actions/checkout@v4\n2021-03-02T10:05:02.0000000Z HEAD is now at {} BUG-812: handle a missing region\n2021-03-02T10:06:00.0000000Z ##[endgroup]\n2021-03-02T10:09:00.0000000Z Cleaning up orphan processes\n", &fix[..8]).as_bytes(),
     );
+    }
     // Unrelated data: no shared references.
     write(&d, "discord.zip", &zip_bytes(&[("messages/c1/messages.json", json!([{"ID": "1", "Timestamp": "2021-05-01 10:00:00", "Contents": "anyone up for a game tonight?"}]).to_string().as_bytes())]));
     let mut inputs = vec![
@@ -97,7 +100,7 @@ fn fixture(name: &str, with_jira: bool) -> scout_core::Inventory {
 
 #[test]
 fn one_piece_of_work_across_five_systems_is_one_complete_episode() {
-    let inv = fixture("episodes", true);
+    let inv = fixture("episodes", true, true);
     let ev = evaluate(&inv, None, &mut |_| {});
     let e = &ev.episodes;
     assert_eq!(e.commits, 4, "{e:#?}");
@@ -139,7 +142,7 @@ fn one_piece_of_work_across_five_systems_is_one_complete_episode() {
 
 #[test]
 fn without_the_ticket_export_jira_is_the_gap_to_fill() {
-    let inv = fixture("episodes-gap", false);
+    let inv = fixture("episodes-gap", false, true);
     let ev = evaluate(&inv, None, &mut |_| {});
     let e = &ev.episodes;
     // Still one episode (Slack, email, commits, CI), now without an intent
@@ -152,4 +155,31 @@ fn without_the_ticket_export_jira_is_the_gap_to_fill() {
     assert_eq!(jira.records, 5, "{:?}", e.gaps);
     assert_eq!(jira.distinct_targets, 3);
     assert!(jira.advice.contains("CSV"));
+}
+
+#[test]
+fn without_results_nothing_is_complete_and_the_gaps_say_what_would_complete_it() {
+    // Like many real exports: chat, email and code, but no tracker and no
+    // build logs, so no piece of work records how it turned out.
+    let inv = fixture("episodes-noresult", false, false);
+    let e = evaluate(&inv, None, &mut |_| {}).episodes;
+    assert_eq!(e.episodes, 1, "{e:#?}");
+    assert_eq!(e.complete, 0);
+    assert_eq!((e.with_why, e.with_action, e.with_outcome), (1, 1, 0));
+    let gap = |id: &str| {
+        e.gaps
+            .iter()
+            .find(|g| g.id == id)
+            .unwrap_or_else(|| panic!("{id}: {:?}", e.gaps))
+    };
+    // A Jira export adds the request and the result; CI logs add the result.
+    assert_eq!(gap("jira").would_complete, 1);
+    assert_eq!(gap("jira").adds, vec!["why", "how it turned out"]);
+    assert_eq!(gap("ci").would_complete, 1);
+    // The tickets mentioned only in passing would become new linked work.
+    assert_eq!(gap("jira").would_add, 2);
+    // Completing gaps come first.
+    assert!(e.gaps[0].would_complete >= e.gaps.last().unwrap().would_complete);
+    assert_eq!(e.shapes[0].episodes, 1);
+    assert!(e.shapes[0].why && e.shapes[0].action && !e.shapes[0].outcome);
 }

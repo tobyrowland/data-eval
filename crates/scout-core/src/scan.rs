@@ -1015,6 +1015,9 @@ impl Scanner<'_> {
                     }
                     Format::Mbox => text::analyze(m_reader, true, false),
                     Format::Eml => text::analyze(m_reader, false, true),
+                    Format::Pdf | Format::OfficeDocument | Format::OpenDocument => {
+                        document(format, m_reader, self.opts.evaluator.is_some())
+                    }
                     _ => Ok(Outcome::inventoried()),
                 }
             };
@@ -1106,7 +1109,13 @@ impl Scanner<'_> {
                 _ if code_or_data => None,
                 Format::Html => Some(strip_markup(&sample)),
                 Format::Mbox | Format::Eml => Some(strip_mail_headers(&sample)),
-                Format::PlainText | Format::Markdown => Some(sample),
+                Format::PlainText | Format::Markdown | Format::Pdf => Some(sample),
+                // Word, PowerPoint and text documents; spreadsheet cells are not prose.
+                Format::OfficeDocument | Format::OpenDocument
+                    if !matches!(ext.as_str(), "xlsx" | "xlsm" | "ods") =>
+                {
+                    Some(sample)
+                }
                 _ => None, // XML is usually data, not prose
             };
             if let Some(text) = text {
@@ -1208,4 +1217,41 @@ pub fn member_path_is_safe(name: &str) -> bool {
     !(n.starts_with('/')
         || n.as_bytes().get(1) == Some(&b':')
         || n.split('/').any(|seg| seg == ".."))
+}
+
+/// Reads a PDF, Office or OpenDocument file's text. During an evaluation
+/// pass the bytes only flow through to the evaluator, which extracts the
+/// text itself.
+fn document(format: Format, r: &mut dyn Read, evaluating: bool) -> io::Result<Outcome> {
+    use crate::analyze::docs;
+    let mut buf = Vec::new();
+    r.take(docs::MAX_DOCUMENT_BYTES as u64 + 1)
+        .read_to_end(&mut buf)?;
+    if buf.len() > docs::MAX_DOCUMENT_BYTES {
+        return Ok(Outcome::with(Status::Inventoried, Reason::ObjectTooLarge));
+    }
+    if evaluating {
+        return Ok(Outcome::assessed(None));
+    }
+    let Some(doc) = docs::extract(format, &buf) else {
+        let reason = if format == Format::OfficeDocument && !buf.starts_with(b"PK") {
+            Reason::NoParserInThisRelease // legacy .doc, .xls, .ppt
+        } else if format == Format::Pdf && buf.windows(8).any(|w| w == b"/Encrypt") {
+            Reason::PasswordProtected
+        } else {
+            Reason::NoReadableText
+        };
+        return Ok(Outcome::with(Status::Inventoried, reason));
+    };
+    let mut o = Outcome::assessed(None);
+    o.text_bytes = doc.text.len() as u64;
+    o.words = doc.text.split_whitespace().count() as u64;
+    let max = crate::analyze::language::MAX_SAMPLE_BYTES;
+    let truncated = doc.text.len() > max;
+    let mut end = doc.text.len().min(max);
+    while !doc.text.is_char_boundary(end) {
+        end -= 1;
+    }
+    o.sample = Some((doc.text[..end].to_string(), truncated));
+    Ok(o)
 }

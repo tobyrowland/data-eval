@@ -287,7 +287,7 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
     md.push_str("## How to read this report\n\n");
     md.push_str("You are assessing a company's internal data as potential training data for large language models. The owner ran Working Minds on their own computer; it read every readable document and produced the measurements below. Please assess: (1) the likely value of this data for LLM training (pre-training, instruction tuning, dialogue), (2) its strengths and weaknesses, (3) rights, privacy and contamination risks you can infer, and (4) what the owner should add, remove or clarify before a sale.\n\n");
     let _ = writeln!(md, "Method: {}\n", ev.method);
-    md.push_str("Definitions: *tokens* are estimated, not counted with a specific tokenizer. *Usable* tokens are written by people, have a quality score of at least 0.5 and are not duplicates. *Pre-2023* text predates widespread AI-generated text. Duplicates are removed across all items (exact and MinHash near-duplicates; Slack messages by channel and timestamp, emails by Message-ID, Teams and Discord messages by ID). PDF and Office files, images, audio and video are counted but not evaluated yet.\n\n");
+    md.push_str("Definitions: *tokens* are estimated, not counted with a specific tokenizer. *Usable* tokens are written by people, have a quality score of at least 0.5 and are not duplicates. *Pre-2023* text predates widespread AI-generated text. Duplicates are removed across all items (exact and MinHash near-duplicates; Slack messages by channel and timestamp, emails by Message-ID, Teams and Discord messages by ID). Word, PowerPoint, Excel, OpenDocument and PDF files are read for their text; scanned PDFs, protected files, legacy binary Office files, images, audio and video are counted but not evaluated.\n\n");
 
     md.push_str("## Summary\n\n");
     let _ = writeln!(md, "| Measure | Value |\n|---|---|");
@@ -335,10 +335,12 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
         ),
         ("Platforms", platforms.join(", ")),
         (
-            "Not evaluated yet",
+            "Documents read / not evaluated",
             format!(
-                "{} PDF/Office files, {} media files",
-                ev.not_evaluated.pdf_and_office_files, ev.not_evaluated.media_files
+                "{} PDF/Office files read; not evaluated: {} PDF/Office files without readable text, {} media files",
+                ev.not_evaluated.documents_read,
+                ev.not_evaluated.pdf_and_office_files,
+                ev.not_evaluated.media_files
             ),
         ),
     ];
@@ -437,7 +439,15 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
         ),
         ("Partial (two or more roles)", e.partial),
         ("Linked discussion only", e.linked_discussion),
-        ("With an outcome", e.with_outcome),
+        ("With why (request or discussion)", e.with_why),
+        (
+            "With what was done (code change or document)",
+            e.with_action,
+        ),
+        (
+            "With how it turned out (build result or resolved ticket)",
+            e.with_outcome,
+        ),
         ("Spanning two or more systems", e.multi_system),
         ("Starting before 2023", e.pre_llm),
         ("Records in trajectories", e.records_linked),
@@ -480,12 +490,17 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
         }
     }
     if !e.gaps.is_empty() {
-        md.push_str("\nSystems referenced but not uploaded (adding them would link more records):\n\n| System | Records that would gain a link | Distinct items cited |\n|---|---|---|\n");
+        md.push_str("\nSystems referenced but not uploaded, ranked by the trajectories they would complete (upper estimates: they assume the export holds the cited items and, for tickets, that they were resolved):\n\n| System | Adds | Would complete | New trajectories | Records citing it | Distinct items cited |\n|---|---|---|---|---|---|\n");
         for g in &e.gaps {
             let _ = writeln!(
                 md,
-                "| {} | {} | {} |",
-                g.name, g.records, g.distinct_targets
+                "| {} | {} | {} | {} | {} | {} |",
+                g.name,
+                g.adds.join(", "),
+                g.would_complete,
+                g.would_add,
+                g.records,
+                g.distinct_targets
             );
         }
     }
