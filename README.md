@@ -175,6 +175,14 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
      pieces of work each would complete** ("Add Jira · up to +1,210
      complete · +2,950 linked"), and the most common kinds of linked work
      with the part each lacks. *Find linked work* runs the evaluation.
+     **Try it with test data** (on the Jira step) writes a fake Jira CSV,
+     on this computer, for the ticket keys the owner's own data mentions
+     (about three in four resolved shortly after their last mention), so
+     they can see how linked work completes. Every row is marked
+     `Working Minds test data = yes`; while such rows are loaded, the
+     Linked work tab, the report and the send panel warn that the figures
+     include fake tickets. `working-minds test-jira <inputs> --out x.csv`
+     does the same from the command line.
    - **Your files:** the map, Your platforms, All items and Files by format
      (formats and coverage), for housekeeping.
    - **Details:** the training value tables, other ways to raise the value,

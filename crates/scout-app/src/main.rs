@@ -841,6 +841,56 @@ fn wm_report_preview(app: AppHandle, state: State<'_, AppState>) -> Result<Repor
     })
 }
 
+/// Fake Jira data for the tickets the owner's data mentions, so they can see
+/// how linked work completes. Written to Documents › Working Minds and
+/// marked as test data in every row.
+#[tauri::command]
+async fn make_test_jira(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let (inputs, exclude) = {
+        let guard = state.inventory.lock().unwrap();
+        let inv = guard.as_ref().ok_or("There is no assessment yet.")?;
+        (
+            inv.collections
+                .iter()
+                .map(|c| c.source.clone())
+                .collect::<Vec<_>>(),
+            inv.exclude.clone(),
+        )
+    };
+    let cancel = Arc::new(AtomicBool::new(false));
+    *state.cancel.lock().unwrap() = Some(cancel.clone());
+    let handle = app.clone();
+    let mentions = tauri::async_runtime::spawn_blocking(move || {
+        let mut last = Instant::now() - Duration::from_secs(1);
+        scout_core::evaluate::ticket_mentions(inputs, exclude, Some(cancel), &mut |p| {
+            if last.elapsed() >= Duration::from_millis(150) {
+                let _ = handle.emit("scout://evaluate", p);
+                last = Instant::now();
+            }
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    *state.cancel.lock().unwrap() = None;
+    if mentions.is_empty() {
+        return Err("Your data doesn't mention any Jira tickets to build test data from.".into());
+    }
+    let csv = scout_core::evaluate::testdata::test_jira_csv(&mentions);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let file = output_dir(&app)?.join(format!(
+        "Working Minds TEST Jira export (fake) - {}.csv",
+        ymd(now)
+    ));
+    std::fs::write(&file, csv).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "path": file.to_string_lossy(), "tickets": mentions.len() }))
+}
+
 /// Saves the report, opens the owner's email program addressed to Working
 /// Minds and shows the file to attach. The app itself sends nothing.
 #[tauri::command]
@@ -945,6 +995,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             initial_paths,
+            make_test_jira,
             describe_paths,
             pick_files,
             pick_folder,

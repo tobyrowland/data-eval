@@ -13,6 +13,7 @@ pub mod links;
 pub mod mail;
 pub mod minhash;
 pub mod quality;
+pub mod testdata;
 
 use crate::model::{Format, Status};
 use crate::scan::{Inventory, ScanOptions};
@@ -388,14 +389,12 @@ impl Evaluator {
             {
                 continue;
             }
-            let year = ts
-                .split('.')
-                .next()
-                .and_then(|t| t.parse::<i64>().ok())
-                .map(year_of_unix);
+            let time = ts.split('.').next().and_then(|t| t.parse::<i64>().ok());
+            let year = time.map(year_of_unix);
             let tokens = if bot { 0 } else { tokens_of(text) };
             self.links
                 .record(unit, "slack", Role::Discussion, year, tokens);
+            self.links.time(unit, time);
             self.links.add_found(unit, found);
             for k in files {
                 self.links.add_ref(unit, k, "documents");
@@ -420,14 +419,15 @@ impl Evaluator {
             .or_else(|| m.get("id").and_then(Value::as_str))
             .unwrap_or("");
         let unit = self.links.hash(&["tm", root]);
-        let year = m
+        let time = m
             .get("createdDateTime")
             .and_then(Value::as_str)
-            .and_then(crate::analyze::teams::parse_time)
-            .map(year_of_unix);
+            .and_then(crate::analyze::teams::parse_time);
+        let year = time.map(year_of_unix);
         let tokens = tokens_of(&crate::analyze::language::strip_markup(body));
         self.links
             .record(unit, "teams", Role::Discussion, year, tokens);
+        self.links.time(unit, time);
         self.links.add_found(unit, found);
     }
 
@@ -448,14 +448,15 @@ impl Evaluator {
             .and_then(Value::as_str)
             .unwrap_or(text);
         let unit = self.links.hash(&["dm", path, id]);
-        let year = m
+        let time = m
             .get("Timestamp")
             .or_else(|| m.get("timestamp"))
             .and_then(Value::as_str)
-            .and_then(crate::analyze::teams::parse_time)
-            .map(year_of_unix);
+            .and_then(crate::analyze::teams::parse_time);
+        let year = time.map(year_of_unix);
         self.links
             .record(unit, "discord", Role::Discussion, year, tokens_of(text));
+        self.links.time(unit, time);
         self.links.add_found(unit, found);
     }
 
@@ -530,6 +531,7 @@ impl Evaluator {
             let fresh = !self.links.has(unit);
             self.links
                 .record(unit, system, Role::Action, year, tokens_of(&c.message));
+            self.links.time(unit, c.time);
             if !fresh {
                 continue;
             }
@@ -608,6 +610,7 @@ impl Evaluator {
             "canceled",
         ]);
         let created = col_of(&["created", "created at", "created date", "created_at"]);
+        let test_flag = col_of(&["working minds test data"]);
         for r in rows.iter().skip(1) {
             let Some(key) = r.get(key_col).map(|k| k.trim()).filter(|k| !k.is_empty()) else {
                 continue;
@@ -656,6 +659,12 @@ impl Evaluator {
             let found = self.links.find(&body);
             self.links.add_found(unit, found);
             self.links.note_ticket();
+            if test_flag
+                .and_then(|c| r.get(c))
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("yes"))
+            {
+                self.links.note_test_ticket();
+            }
             self.submit(col, Kind::Document, &body, true, year, 0);
         }
         true
@@ -1091,6 +1100,38 @@ pub fn evaluate_inputs(
     // Take the results out (the progress closure still holds a handle).
     let evaluator = std::mem::take(&mut *ev.lock().unwrap_or_else(|e| e.into_inner()));
     evaluator.finish(&pass, &labels, pass.cancelled, started.elapsed().as_secs())
+}
+
+/// Reads the items again, like an evaluation, and lists the ticket keys
+/// their messages, emails, documents and commits mention, with when and
+/// where. For generating test tracker data on this computer only.
+pub fn ticket_mentions(
+    inputs: Vec<PathBuf>,
+    exclude: Vec<String>,
+    cancel: Option<Arc<AtomicBool>>,
+    progress: &mut dyn FnMut(&EvalProgress),
+) -> Vec<links::TicketMention> {
+    let mut e = Evaluator::default();
+    e.links.capture_tickets = true;
+    let ev = Arc::new(Mutex::new(e));
+    let opts = ScanOptions {
+        exclude,
+        cancel,
+        evaluator: Some(ev.clone()),
+        ..ScanOptions::default()
+    };
+    let probe = ev.clone();
+    crate::scan::scan_with_progress(&inputs, opts, &mut |p| {
+        let docs = probe.lock().map(|e| e.documents() as u64).unwrap_or(0);
+        progress(&EvalProgress {
+            documents: docs,
+            bytes_read: p.bytes_read,
+            files_seen: p.files_seen,
+            collection: p.collection.clone(),
+        });
+    });
+    let mut e = ev.lock().unwrap_or_else(|e| e.into_inner());
+    e.links.take_mentions()
 }
 
 /// Copies what a content parser reads into a document collector.
