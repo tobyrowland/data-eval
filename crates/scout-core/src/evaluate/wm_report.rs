@@ -439,7 +439,15 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
         ),
         ("Partial (two or more roles)", e.partial),
         ("Linked discussion only", e.linked_discussion),
-        ("With an outcome", e.with_outcome),
+        ("With why (request or discussion)", e.with_why),
+        (
+            "With what was done (code change or document)",
+            e.with_action,
+        ),
+        (
+            "With how it turned out (build result or resolved ticket)",
+            e.with_outcome,
+        ),
         ("Spanning two or more systems", e.multi_system),
         ("Starting before 2023", e.pre_llm),
         ("Records in trajectories", e.records_linked),
@@ -482,12 +490,17 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
         }
     }
     if !e.gaps.is_empty() {
-        md.push_str("\nSystems referenced but not uploaded (adding them would link more records):\n\n| System | Records that would gain a link | Distinct items cited |\n|---|---|---|\n");
+        md.push_str("\nSystems referenced but not uploaded, ranked by the trajectories they would complete (upper estimates: they assume the export holds the cited items and, for tickets, that they were resolved):\n\n| System | Adds | Would complete | New trajectories | Records citing it | Distinct items cited |\n|---|---|---|---|---|---|\n");
         for g in &e.gaps {
             let _ = writeln!(
                 md,
-                "| {} | {} | {} |",
-                g.name, g.records, g.distinct_targets
+                "| {} | {} | {} | {} | {} | {} |",
+                g.name,
+                g.adds.join(", "),
+                g.would_complete,
+                g.would_add,
+                g.records,
+                g.distinct_targets
             );
         }
     }

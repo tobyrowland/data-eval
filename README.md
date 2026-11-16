@@ -166,16 +166,19 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
    flagged "Only connected to …". A group is only flagged when it shows
    whose data it is (people, addresses, domains or distinctive names), not
    when it is merely thin.
-3. **Two tabs.** **Inventory** holds everything above: the map and Your
-   platforms (what's collected, the files in each item, duplicates, missing
-   files and unconnected data), All items (one row per file, folder or
-   export added) and Files by format (file formats and coverage: how far
-   each file could be read), ending with a pointer to the second tab.
-   **Analysis & value** holds the training value (with *Evaluate training
-   value*, live progress and *Stop*), linked work and what to add to raise
-   the value, then what's in the content: activity over time and
-   languages. Housekeeping tips stay on
-   Inventory; value tips stay on Analysis & value.
+3. **Three tabs, led by linked work.**
+   - **Linked work** (first): how many pieces of work the data shows from
+     start to finish and how many are complete, with three bars for *why*
+     (a request, ticket or discussion), *what was done* (a code change or
+     document) and *how it turned out* (a build result or resolved ticket),
+     a plain sentence on what's missing, **next steps ranked by how many
+     pieces of work each would complete** ("Add Jira · up to +1,210
+     complete · +2,950 linked"), and the most common kinds of linked work
+     with the part each lacks. *Find linked work* runs the evaluation.
+   - **Your files:** the map, Your platforms, All items and Files by format
+     (formats and coverage), for housekeeping.
+   - **Details:** the training value tables, other ways to raise the value,
+     activity over time and languages.
 
    **Training value.** The evaluation is a second
    pass that reads every readable document in full, on this computer, and

@@ -260,8 +260,16 @@
       </div>
       ${extra.banner || ""}
       <div class="tabs" role="tablist">
-        <button role="tab" class="tab ${activeTab === "map" ? "on" : ""}" data-tab="map" aria-selected="${activeTab === "map"}">Inventory</button>
-        <button role="tab" class="tab ${activeTab === "training" ? "on" : ""}" data-tab="training" aria-selected="${activeTab === "training"}">Analysis &amp; value${extra.evaluating ? ` <span class="tab-dot" aria-hidden="true"></span>` : ""}</button>
+        <button role="tab" class="tab ${activeTab === "work" ? "on" : ""}" data-tab="work" aria-selected="${activeTab === "work"}">Linked work${extra.evaluating ? ` <span class="tab-dot" aria-hidden="true"></span>` : ""}</button>
+        <button role="tab" class="tab ${activeTab === "map" ? "on" : ""}" data-tab="map" aria-selected="${activeTab === "map"}">Your files</button>
+        <button role="tab" class="tab ${activeTab === "training" ? "on" : ""}" data-tab="training" aria-selected="${activeTab === "training"}">Details</button>
+      </div>
+      <div class="tab-pane" data-pane="work" ${activeTab === "work" ? "" : "hidden"}>
+        <div class="section-head tv-pane-head">
+          <div><h2>Linked work</h2><p>The most valuable training data shows a piece of work from start to finish: why it was done, what was done, and how it turned out. Working Minds finds these across your systems and tells you what to add to complete more of them.</p></div>
+          <div class="section-actions"><button class="btn primary" data-act="send-report" ${extra.evaluation ? "" : "disabled"}>Send report to Working Minds</button></div>
+        </div>
+        <div id="linked-work"></div>
       </div>
       <div class="tab-pane" data-pane="map" ${activeTab === "map" ? "" : "hidden"}>
       <section class="card hero reveal" style="animation-delay:60ms">
@@ -306,8 +314,7 @@
       </div>
       <div class="tab-pane" data-pane="training" ${activeTab === "training" ? "" : "hidden"}>
         <div class="section-head tv-pane-head">
-          <div><h2>Training value</h2><p>How much of your data is useful for training AI models, measured document by document on this computer, and how to raise it by linking your work across systems.</p></div>
-          <div class="section-actions"><button class="btn primary" data-act="send-report" ${extra.evaluation ? "" : "disabled"}>Send report to Working Minds</button></div>
+          <div><h2>Training value</h2><p>How much of your text is useful for training AI models, measured document by document on this computer.</p></div>
         </div>
         <div id="training-value"></div>
         <section class="section">
@@ -494,6 +501,7 @@
     const steps = root.querySelector("#next-steps");
     const redraw = () => renderNextSteps(steps, map, plan, handlers, redraw, extra || {});
     renderTraining(root.querySelector("#training-value"), map, extra.evaluation || null, handlers, extra.evaluating || null);
+    renderLinkedWork(root.querySelector("#linked-work"), map, extra.evaluation || null, handlers, extra.evaluating || null);
     renderTvCard(root.querySelector("#tv-card"), map, extra.evaluation || null, extra.evaluating || null, handlers);
     root.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
     const send = root.querySelector('[data-act="send-report"]');
@@ -523,7 +531,7 @@
   const PLATFORM_NAMES = { slack: "Slack", teams: "Microsoft Teams", discord: "Discord", email: "Email", google_drive: "Google Drive", google_other: "Google (other products)", github: "GitHub", gitlab: "GitLab", bitbucket: "Bitbucket" };
   const PLATFORM_ORDER = ["slack", "teams", "discord", "email", "google_drive", "google_other", "github", "gitlab", "bitbucket"];
   // Which tab is showing, kept across redraws.
-  let activeTab = "map";
+  let activeTab = "work";
   // Item rows whose file tree is open, kept across redraws.
   const openTrees = new Set();
 
@@ -954,59 +962,90 @@
           <tbody>${rows}</tbody></table></div>
         <div class="tv-foot"><span class="muted small">${esc(ev.method)} Evaluated in ${num(ev.seconds)}s.</span><button class="btn ghost small" data-tv="run">Evaluate again</button></div>
       </div>
-      ${episodesCard(ev.episodes, tips)}`;
+      ${tips.length ? `<div class="card tv-card"><div class="step-other ep-gaps"><b>More ways to raise the value</b><ul>${tips.map((x) => `<li>${x}</li>`).join("")}</ul></div></div>` : ""}`;
     host.querySelector('[data-tv="run"]').onclick = () => handlers.onEvaluate && handlers.onEvaluate();
   }
 
-  /** What to add to link more work, in the owner's words. */
-  function gapLine(g) {
-    const n = num(g.records);
-    const t = num(g.distinct_targets);
-    let what;
-    if (g.id === "ci") what = `${n} commits have no build or test results.`;
-    else if (["github", "bitbucket", "gitlab", "git"].includes(g.id)) what = `${n} messages and documents link to ${esc(g.name)} pull requests or commits (${t}), but the repository's history isn't here.`;
-    else if (g.id === "jira" || g.id === "linear") what = `${n} messages, emails and commits mention ${t} ${esc(g.name)} tickets you haven't added.`;
-    else what = `${n} messages and documents link to ${t} ${esc(g.name)} pages or items you haven't added.`;
-    return `<li><b>Add ${esc(g.name)}</b> <span>${what}</span><small class="muted">${esc(g.advice)}</small></li>`;
-  }
-
-  /** Linked work ("work trajectories"): one piece of work rebuilt across systems. */
-  function episodesCard(e, tips) {
-    if (!e) return "";
-    tips = tips || [];
-    const gaps = (e.gaps || []).slice(0, 3);
-    const total = e.complete + e.partial + e.linked_discussion;
-    const seg = (n, cls, label) => (n ? `<span class="ep-seg ${cls}" style="flex:${n}" title="${label}: ${num(n)}"></span>` : "");
-    const pairs = (e.system_pairs || []).slice(0, 3).map((p) => `${esc(p.a_name)} ↔ ${esc(p.b_name)} (${num(p.episodes)})`).join(" · ");
-    const sources = [
-      e.commits ? `${num(e.commits)} commits` : "",
-      e.tickets ? `${num(e.tickets)} tickets` : "",
-      e.ci_logs ? `${num(e.ci_logs)} build logs (${num(e.ci_passed)} passed, ${num(e.ci_failed)} failed)` : "",
-    ].filter(Boolean).join(" · ");
-    const head = e.episodes
-      ? `<h3><b>${num(e.episodes)}</b> pieces of work linked across your systems</h3>`
-      : `<h3>No linked work found yet</h3>`;
-    return `<div class="card tv-card ep-card">
-      <div class="tv-head">
-        <div class="tv-headline">
-          <div class="tv-sub">Raise the value · linked work</div>
-          ${head}
-          <p>Working Minds joins the records of one piece of work: the conversation about it, the ticket, the code change, the document, and the build that tested it. Records are joined only when they cite the same ticket, pull request, commit, document or email thread. Linked work that shows what was done and how it turned out is the most valuable kind of training data.</p>
+  /** The Linked work tab: how many pieces of work, what they lack, and
+   *  what to add to complete more, ranked. */
+  function renderLinkedWork(host, map, ev, handlers, state) {
+    if (!host) return;
+    if (state && state.running) {
+      const p = state.progress || {};
+      host.innerHTML = `<div class="card tv-card tv-running">
+        <div class="adding-ring" aria-hidden="true"></div>
+        <div class="tv-run-text"><b>Finding linked work…</b>
+          <span>${num(p.documents || 0)} documents read · ${bytes(p.bytes_read || 0)}</span>
+          <small class="muted">Everything stays on this computer.</small></div>
+        <button class="btn ghost small" data-lw="stop">Stop</button></div>`;
+      host.querySelector('[data-lw="stop"]').onclick = (e) => { e.currentTarget.disabled = true; e.currentTarget.textContent = "Stopping…"; handlers.onStopEvaluate && handlers.onStopEvaluate(); };
+      return;
+    }
+    if (!ev || !ev.episodes) {
+      host.innerHTML = `<div class="card tv-card tv-intro">
+        <div><b>Find the linked work in your data</b>
+          <p>Working Minds reads your messages, emails, documents, code history, tickets and build logs on this computer, and joins the records that belong to the same piece of work: the conversation, the ticket, the code change and the result. It takes ${esc(evaluationEstimate(map))}.</p></div>
+        <button class="btn primary" data-lw="run">Find linked work</button></div>`;
+      host.querySelector('[data-lw="run"]').onclick = () => handlers.onEvaluate && handlers.onEvaluate();
+      return;
+    }
+    const e = ev.episodes;
+    const n = e.episodes || 0;
+    const pctOf = (a) => (n ? Math.round((a * 100) / n) : 0);
+    const part = (label, have, hint) => `<div class="lw-part">
+        <div class="lw-part-head"><b>${label}</b><span>${num(have)} of ${num(n)}</span></div>
+        <div class="lw-track"><span style="width:${pctOf(have)}%"></span></div>
+        <small class="muted">${hint}</small></div>`;
+    // What stops pieces of work being complete, in plain words.
+    let why;
+    if (!n) why = "Your items don't cite each other's tickets, pull requests, commits or documents yet, so no work could be joined across them.";
+    else if (e.complete === n) why = "Every piece of linked work shows why, what was done and how it turned out.";
+    else if (!e.with_outcome) why = `None of them records how the work turned out: there are no build results or resolved tickets in your data. That's the part buyers value most, and the reason ${e.complete ? "so few are" : "none is"} complete.`;
+    else if (!e.with_action) why = "None of them includes the work itself (a code change or a document).";
+    else why = `${num(n - e.complete)} are missing at least one part. The steps below fill the most.`;
+    const gaps = e.gaps || [];
+    const steps = gaps.slice(0, 6).map((g, i) => {
+      const badges = [
+        g.would_complete ? `<span class="lw-badge c">up to +${num(g.would_complete)} complete</span>` : "",
+        g.would_add ? `<span class="lw-badge a">+${num(g.would_add)} linked</span>` : "",
+      ].join("");
+      const adds = (g.adds || []).join(" and ");
+      let what;
+      if (g.id === "ci") what = `${num(g.records)} commits have no build or test result.`;
+      else if (["jira", "linear"].includes(g.id)) what = `${num(g.records)} messages, emails and commits mention ${num(g.distinct_targets)} ${esc(g.name)} tickets you haven't added.`;
+      else if (["github", "bitbucket", "gitlab", "git"].includes(g.id)) what = `${num(g.records)} messages and documents link to ${esc(g.name)} pull requests or commits, but the repository's history isn't here.`;
+      else what = `${num(g.records)} messages and documents link to ${num(g.distinct_targets)} ${esc(g.name)} items you haven't added.`;
+      return `<li class="lw-step${i === 0 ? " first" : ""}">
+        <div class="lw-step-num">${i + 1}</div>
+        <div class="lw-step-body">
+          <div class="lw-step-head"><b>Add ${esc(g.name)}</b>${badges}</div>
+          <p>${what}${adds ? ` It adds <i>${esc(adds)}</i>.` : ""}</p>
+          <small class="muted">${esc(g.advice)}</small>
+        </div></li>`;
+    }).join("");
+    const shapes = (e.shapes || []).map((s) => `<tr>
+        <td>${s.systems.map(esc).join(" + ")}</td>
+        <td class="lw-ok">${s.why ? "✓" : "—"}</td><td class="lw-ok">${s.action ? "✓" : "—"}</td><td class="lw-ok">${s.outcome ? "✓" : "<b class=\"lw-miss\">missing</b>"}</td>
+        <td class="num">${num(s.episodes)}</td></tr>`).join("");
+    host.innerHTML = `
+      ${ev.incomplete ? `<div class="pc-note warn"><span><b>Stopped before the end.</b> These numbers cover only what was read.</span></div>` : ""}
+      <div class="card tv-card lw-head">
+        <div class="lw-headline">
+          <h3><b>${num(n)}</b> pieces of linked work · <b>${num(e.complete)}</b> complete</h3>
+          <p>${why}</p>
         </div>
-        ${e.episodes ? `<div class="tv-figures">
-          <div><strong>${num(e.complete)}</strong><span>complete: work and its result</span></div>
-          <div><strong>${num(e.partial)}</strong><span>partial</span></div>
-          <div><strong>${num(e.linked_discussion)}</strong><span>linked conversations</span></div>
-          <div><strong>${num(e.multi_system)}</strong><span>across two or more systems</span></div>
-        </div>` : ""}
+        <div class="lw-parts">
+          ${part("Why", e.with_why, "a request, ticket or discussion")}
+          ${part("What was done", e.with_action, "a code change or a document")}
+          ${part("How it turned out", e.with_outcome, "a build result or a resolved ticket")}
+        </div>
       </div>
-      ${total ? `<div class="ep-bar" aria-label="Linked work by completeness">${seg(e.complete, "c", "Complete")}${seg(e.partial, "p", "Partial")}${seg(e.linked_discussion, "d", "Linked conversations")}</div>
-        <div class="ep-legend muted small"><span><i class="c"></i>Complete</span><span><i class="p"></i>Partial</span><span><i class="d"></i>Linked conversations</span></div>` : ""}
-      ${pairs || sources ? `<p class="muted small ep-meta">${pairs ? `Most linked: ${pairs}` : ""}${pairs && sources ? "<br>" : ""}${sources ? `Read: ${sources}` : ""}</p>` : ""}
-      ${gaps.length ? `<div class="step-other ep-gaps"><b>Link more of your work</b><ul>${gaps.map(gapLine).join("")}</ul></div>`
-        : e.episodes ? "" : `<p class="muted small">Your items don't cite each other's tickets, pull requests, commits or documents yet. Adding a ticket tracker, repositories with history or build logs lets Working Minds join conversations to the work they led to.</p>`}
-      ${tips.length ? `<div class="step-other ep-gaps"><b>More ways to raise the value</b><ul>${tips.map((x) => `<li>${x}</li>`).join("")}</ul></div>` : ""}
-    </div>`;
+      ${steps ? `<div class="card tv-card"><div class="tv-sub">Next steps · ranked by what they complete</div>
+        <ol class="lw-steps">${steps}</ol>
+        <p class="muted small">"Up to" assumes the export contains the items your data mentions and, for tickets, that they were resolved. The numbers update when you add the files.</p></div>` : ""}
+      ${shapes ? `<div class="card tv-card"><div class="tv-sub">What your linked work looks like</div>
+        <div class="tbl-wrap"><table class="tbl lw-tbl"><thead><tr><th>Systems joined</th><th>Why</th><th>What was done</th><th>How it turned out</th><th class="num">Pieces</th></tr></thead><tbody>${shapes}</tbody></table></div>
+        <p class="muted small">Records are joined only when they cite the same ticket, pull request, commit, document or email thread. ${e.commits ? `Read: ${num(e.commits)} commits` : ""}${e.tickets ? ` · ${num(e.tickets)} tickets` : ""}${e.ci_logs ? ` · ${num(e.ci_logs)} build logs` : ""}</p></div>` : ""}`;
   }
 
   /** Two-step button: the first click asks, the second acts. */
@@ -1093,13 +1132,13 @@
     } else if (ev) {
       const rating = { high: "High", medium: "Medium", low: "Low" }[ev.rating] || ev.rating;
       const ep = ev.episodes || {};
-      text = `<span><b>Next: what it's worth.</b> ${esc(rating)} training value · about ${compact(ev.totals.usable_tokens)} usable tokens${ep.episodes ? ` · ${num(ep.episodes)} pieces of linked work` : ""}</span>`;
+      text = `<span><b>Linked work:</b> ${num(ep.episodes || 0)} pieces, ${num(ep.complete || 0)} complete${(ep.gaps || [])[0] ? ` · next: add ${esc(ep.gaps[0].name)}` : ""} <span class="muted">· ${esc(rating)} training value</span></span>`;
     } else {
-      text = `<span><b>Next: what it's worth.</b> <span class="muted">See what's in your data, how much is useful for training AI models, and how to raise its value.</span></span>`;
+      text = `<span><b>Next: find your linked work.</b> <span class="muted">See which pieces of work your data shows from start to finish, and what to add to complete more.</span></span>`;
     }
-    host.innerHTML = `<div class="card tv-slim">${text}<button class="btn secondary small" data-tvc="view">Analysis &amp; value →</button></div>`;
-    host.querySelector('[data-tvc="view"]').onclick = () => setTab("training");
+    host.innerHTML = `<div class="card tv-slim">${text}<button class="btn secondary small" data-tvc="view">Linked work →</button></div>`;
+    host.querySelector('[data-tvc="view"]').onclick = () => setTab("work");
   }
 
-  window.ScoutMap = { render, bytes, num, esc, renderTraining, renderTvCard, setTab };
+  window.ScoutMap = { render, bytes, num, esc, renderTraining, renderLinkedWork, renderTvCard, setTab };
 })();

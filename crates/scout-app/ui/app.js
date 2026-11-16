@@ -275,15 +275,15 @@
     if (evalState.running || assessing) return;
     evalState.running = true;
     evalState.progress = null;
-    window.ScoutMap.setTab && window.ScoutMap.setTab("training");
+    window.ScoutMap.setTab && window.ScoutMap.setTab("work");
     await showMap(currentMap || map); // shows the tabs and the progress view
-    window.ScoutMap.setTab("training");
+    window.ScoutMap.setTab("work");
     try {
       const ev = await invoke("evaluate");
       evalState.running = false;
       await showMap(currentMap || map);
-      window.ScoutMap.setTab("training");
-      toast(ev.incomplete ? "Evaluation stopped: the numbers cover what was read." : "Training value evaluated.");
+      window.ScoutMap.setTab("work");
+      toast(ev.incomplete ? "Evaluation stopped: the numbers cover what was read." : "Linked work found and training value measured.");
     } catch (err) {
       evalState.running = false;
       await showMap(currentMap || map);
@@ -296,6 +296,8 @@
     const handlers = { onStopEvaluate: () => invoke("stop") };
     const h = evalHost();
     if (h) window.ScoutMap.renderTraining(h, currentMap, null, handlers, evalState);
+    const lw = document.getElementById("linked-work");
+    if (lw) window.ScoutMap.renderLinkedWork(lw, currentMap, null, handlers, evalState);
     const card = document.getElementById("tv-card");
     if (card) window.ScoutMap.renderTvCard(card, currentMap, null, evalState, handlers);
   });
