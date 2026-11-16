@@ -291,26 +291,31 @@
     }
   }
   // Fake Jira data from the tickets the owner's data mentions (testing).
+  // Creates the file, adds it and finds linked work again, in one go: the
+  // owner already confirmed, so nothing waits on a short-lived toast.
+  let testJiraPath = null;
   async function makeTestJira(map) {
-    if (evalState.running || assessing) return;
+    if (evalState.running) return;
+    if (assessing) { toast("Wait for the current update to finish, then try again."); return; }
+    let r;
+    // Usually instant (the last evaluation found the tickets); otherwise
+    // the data is read again, with progress.
     evalState.running = true;
     evalState.progress = null;
-    await showMap(currentMap || map);
-    window.ScoutMap.setTab("work");
     try {
-      const r = await invoke("make_test_jira");
-      evalState.running = false;
-      await showMap(currentMap || map);
-      window.ScoutMap.setTab("work");
-      toast(`Created ${num(r.tickets)} fake Jira tickets (test data) in Documents › Working Minds.`, {
-        label: "Add it and find linked work",
-        run: async () => { await addToMap([r.path]); runEvaluation(currentMap); },
-      });
+      r = await invoke("make_test_jira");
     } catch (err) {
       evalState.running = false;
       await showMap(currentMap || map);
       toast(String(err));
+      return;
     }
+    evalState.running = false;
+    testJiraPath = r.path;
+    toast(`Created ${num(r.tickets)} fake test tickets. Adding them and finding linked work again…`);
+    if (!selections.some((s) => s.path === r.path)) await addToMap([r.path]);
+    window.ScoutMap.setTab("work");
+    await runEvaluation(currentMap || map);
   }
 
   listen("scout://evaluate", (e) => {
@@ -386,6 +391,8 @@
       files: fileHandlers,
       onEvaluate: () => runEvaluation(map),
       onMakeTestJira: () => makeTestJira(map),
+      testFile: testJiraPath,
+      onShowTestFile: () => testJiraPath && invoke("reveal", { path: testJiraPath }),
       onStopEvaluate: () => invoke("stop"),
       onSendReport: () => openReport(),
     }, { banner, plan, linkCounts, removedItems, evaluation, evaluating: evalState.running ? evalState : null });

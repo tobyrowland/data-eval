@@ -225,3 +225,22 @@ fn test_jira_data_from_the_owners_own_mentions_completes_linked_work_and_is_flag
     // Normal evaluations keep no ticket text.
     assert!(!serde_json::to_string(&ev).unwrap().contains("BUG-812"));
 }
+
+#[test]
+fn an_evaluation_also_returns_the_ticket_mentions_without_putting_them_in_its_output() {
+    let inv = fixture("episodes-mentions", false, false);
+    let inputs: Vec<_> = inv.collections.iter().map(|c| c.source.clone()).collect();
+    let labels: Vec<_> = inv.collections.iter().map(|c| c.label.clone()).collect();
+    let (ev, mentions) = scout_core::evaluate::evaluate_inputs_with_mentions(
+        inputs.clone(),
+        labels,
+        vec![],
+        None,
+        &mut |_| {},
+    );
+    let keys: Vec<&str> = mentions.iter().map(|m| m.key.as_str()).collect();
+    assert_eq!(keys, vec!["BUG-812", "BUG-901", "BUG-902"]);
+    let alone = scout_core::evaluate::ticket_mentions(inputs, vec![], None, &mut |_| {});
+    assert_eq!(alone.len(), mentions.len());
+    assert!(!serde_json::to_string(&ev).unwrap().contains("BUG-"));
+}

@@ -1079,8 +1079,23 @@ pub fn evaluate_inputs(
     cancel: Option<Arc<AtomicBool>>,
     progress: &mut dyn FnMut(&EvalProgress),
 ) -> Evaluation {
+    evaluate_inputs_with_mentions(inputs, labels, exclude, cancel, progress).0
+}
+
+/// As [`evaluate_inputs`], also returning the ticket keys the data
+/// mentions (kept in memory by the app to generate test tracker data
+/// instantly; never part of the evaluation's output).
+pub fn evaluate_inputs_with_mentions(
+    inputs: Vec<PathBuf>,
+    labels: Vec<String>,
+    exclude: Vec<String>,
+    cancel: Option<Arc<AtomicBool>>,
+    progress: &mut dyn FnMut(&EvalProgress),
+) -> (Evaluation, Vec<links::TicketMention>) {
     let started = Instant::now();
-    let ev = Arc::new(Mutex::new(Evaluator::default()));
+    let mut e = Evaluator::default();
+    e.links.capture_tickets = true;
+    let ev = Arc::new(Mutex::new(e));
     let opts = ScanOptions {
         exclude,
         cancel: cancel.clone(),
@@ -1098,8 +1113,10 @@ pub fn evaluate_inputs(
         });
     });
     // Take the results out (the progress closure still holds a handle).
-    let evaluator = std::mem::take(&mut *ev.lock().unwrap_or_else(|e| e.into_inner()));
-    evaluator.finish(&pass, &labels, pass.cancelled, started.elapsed().as_secs())
+    let mut evaluator = std::mem::take(&mut *ev.lock().unwrap_or_else(|e| e.into_inner()));
+    let mentions = evaluator.links.take_mentions();
+    let evaluation = evaluator.finish(&pass, &labels, pass.cancelled, started.elapsed().as_secs());
+    (evaluation, mentions)
 }
 
 /// Reads the items again, like an evaluation, and lists the ticket keys

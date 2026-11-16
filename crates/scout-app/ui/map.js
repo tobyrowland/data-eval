@@ -1021,7 +1021,7 @@
           <div class="lw-step-head"><b>Add ${esc(g.name)}</b>${badges}</div>
           <p>${what}${adds ? ` It adds <i>${esc(adds)}</i>.` : ""}</p>
           <small class="muted">${esc(g.advice)}</small>
-          ${["jira", "linear"].includes(g.id) && g.distinct_targets ? `<div class="lw-test"><button class="btn ghost small" data-lw-test>Try it with test data</button><small class="muted">Creates a fake Jira export for the ${num(g.distinct_targets)} tickets your data mentions, so you can see how linked work completes. It isn't real data: remove it before sending a report.</small></div>` : ""}
+          ${["jira", "linear"].includes(g.id) && g.distinct_targets ? `<div class="lw-test"><button class="btn ghost small" data-lw-test>Try it with test data</button><small class="muted">Creates fake Jira tickets for the ${num(g.distinct_targets)} tickets your data mentions, adds them and finds linked work again, so you can see how it completes (takes about as long as Find linked work). It isn't real data: remove it before sending a report.</small></div>` : ""}
         </div></li>`;
     }).join("");
     const shapes = (e.shapes || []).map((s) => `<tr>
@@ -1030,7 +1030,7 @@
         <td class="num">${num(s.episodes)}</td></tr>`).join("");
     host.innerHTML = `
       ${ev.incomplete ? `<div class="pc-note warn"><span><b>Stopped before the end.</b> These numbers cover only what was read.</span></div>` : ""}
-      ${e.test_tickets ? `<div class="pc-note warn"><span><b>Includes ${num(e.test_tickets)} fake test tickets.</b> Linked work that depends on them isn't real. Remove the "Working Minds TEST Jira export" item before sending your report or creating a data pack.</span></div>` : ""}
+      ${e.test_tickets ? `<div class="pc-note warn lw-testnote"><span><b>Includes ${num(e.test_tickets)} fake test tickets.</b> Linked work that depends on them isn't real. To remove them, open <b>Your files</b> and remove the "Working Minds TEST Jira export" item${handlers.testFile ? ` (saved in Documents › Working Minds)` : ""}. Remove it before sending your report or creating a data pack.</span>${handlers.testFile ? `<button class="btn ghost small" data-lw-showtest>Show file</button>` : ""}</div>` : ""}
       <div class="card tv-card lw-head">
         <div class="lw-headline">
           <h3><b>${num(n)}</b> pieces of linked work · <b>${num(e.complete)}</b> complete</h3>
@@ -1049,6 +1049,8 @@
         <div class="tbl-wrap"><table class="tbl lw-tbl"><thead><tr><th>Systems joined</th><th>Why</th><th>What was done</th><th>How it turned out</th><th class="num">Pieces</th></tr></thead><tbody>${shapes}</tbody></table></div>
         <p class="muted small">Records are joined only when they cite the same ticket, pull request, commit, document or email thread. ${e.commits ? `Read: ${num(e.commits)} commits` : ""}${e.tickets ? ` · ${num(e.tickets)} tickets` : ""}${e.ci_logs ? ` · ${num(e.ci_logs)} build logs` : ""}</p></div>` : ""}`;
     confirmClick(host.querySelector("[data-lw-test]"), "Create fake test tickets?", () => handlers.onMakeTestJira && handlers.onMakeTestJira());
+    const showTest = host.querySelector("[data-lw-showtest]");
+    if (showTest) showTest.onclick = () => handlers.onShowTestFile && handlers.onShowTestFile();
   }
 
   /** Two-step button: the first click asks, the second acts. */

@@ -29,6 +29,8 @@ struct AppState {
     /// The latest training-value evaluation, if one was run.
     evaluation: Mutex<Option<serde_json::Value>>,
     evaluation_full: Mutex<Option<scout_core::evaluate::Evaluation>>,
+    /// Ticket keys the data mentions, from the last evaluation (memory only).
+    ticket_mentions: Mutex<Option<Vec<scout_core::evaluate::links::TicketMention>>>,
 }
 
 /// What the Add screen shows for one selection. Only metadata is read here.
@@ -207,6 +209,7 @@ fn finish(
     // The data changed, so an earlier evaluation no longer applies.
     *state.evaluation.lock().unwrap() = None;
     *state.evaluation_full.lock().unwrap() = None;
+    *state.ticket_mentions.lock().unwrap() = None;
     *state.last.lock().unwrap() = Some((json.clone(), text));
     Ok(json)
 }
@@ -712,7 +715,7 @@ async fn evaluate(app: AppHandle, state: State<'_, AppState>) -> Result<serde_js
     let handle = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let mut last = Instant::now() - Duration::from_secs(1);
-        let ev = scout_core::evaluate::evaluate_inputs(
+        let (ev, mentions) = scout_core::evaluate::evaluate_inputs_with_mentions(
             inputs,
             labels,
             exclude,
@@ -725,15 +728,16 @@ async fn evaluate(app: AppHandle, state: State<'_, AppState>) -> Result<serde_js
             },
         );
         serde_json::to_value(&ev)
-            .map(|j| (j, ev))
+            .map(|j| (j, ev, mentions))
             .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?;
     *state.cancel.lock().unwrap() = None;
-    let (json, full) = result?;
+    let (json, full, mentions) = result?;
     *state.evaluation.lock().unwrap() = Some(json.clone());
     *state.evaluation_full.lock().unwrap() = Some(full);
+    *state.ticket_mentions.lock().unwrap() = Some(mentions);
     Ok(json)
 }
 
@@ -860,10 +864,15 @@ async fn make_test_jira(
             inv.exclude.clone(),
         )
     };
+    // The last evaluation already found the mentions: writing is instant.
+    let stored = state.ticket_mentions.lock().unwrap().clone();
     let cancel = Arc::new(AtomicBool::new(false));
     *state.cancel.lock().unwrap() = Some(cancel.clone());
     let handle = app.clone();
     let mentions = tauri::async_runtime::spawn_blocking(move || {
+        if let Some(m) = stored {
+            return m;
+        }
         let mut last = Instant::now() - Duration::from_secs(1);
         scout_core::evaluate::ticket_mentions(inputs, exclude, Some(cancel), &mut |p| {
             if last.elapsed() >= Duration::from_millis(150) {
