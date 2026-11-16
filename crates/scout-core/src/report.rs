@@ -2125,7 +2125,11 @@ fn language_summary(inv: &Inventory) -> LanguageSummary {
             continue;
         }
         match it.format {
-            Format::Pdf | Format::OfficeDocument | Format::OpenDocument => unreadable += 1,
+            Format::Pdf | Format::OfficeDocument | Format::OpenDocument
+                if !it.status.content_examined() =>
+            {
+                unreadable += 1
+            }
             Format::Image | Format::Audio | Format::Video | Format::Executable => non_text += 1,
             _ => {}
         }
@@ -2364,7 +2368,7 @@ pub fn render_text(m: &DataMap) -> String {
         if l.unreadable_documents > 0 {
             let _ = writeln!(
                 s,
-                "  Not yet readable: {} PDF and Office documents",
+                "  No readable text: {} PDF and Office documents (scanned, protected or legacy formats)",
                 group(l.unreadable_documents)
             );
         }

@@ -199,7 +199,7 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
      table by platform and kind (documents, tokens, usable tokens, years,
      value ●●●, why). Below the table is "What would raise the value",
      drawn from the map: missing Slack files, duplicate items, unconnected
-     items, code without history, PDFs not evaluated yet, and linked
+     items, code without history, documents with no readable text, and linked
      platforms not added.
    - **Linked work** ("work trajectories" in the report; *cases* in process
      mining): records from different systems are joined when
@@ -375,8 +375,11 @@ is counted as *Excluded* and its contents are not read.
     letters take the top language; 20–59 letters need a confident result;
     anything shorter is reported as "too short to tell", not guessed. Channel
     names are never used as language labels.
-  - **Not yet read:** PDF and Office documents, which are listed as not yet
-    readable.
+  - **Documents:** Word, PowerPoint and OpenDocument text and PDFs are read
+    for their text (`word/document.xml`, slides and notes, `content.xml`;
+    PDFs with `pdf-extract`). Spreadsheet cells are read but not counted as
+    prose. Scanned PDFs, protected files and legacy .doc/.xls/.ppt are listed
+    as having no readable text.
 - **Slack export recogniser.** Message records split into participant, bot
   and administrative records, plus posting accounts, threads and replies with
   missing parents. It also counts file references, images, visibility,
@@ -424,7 +427,7 @@ private CRANQ reference fixture.
 | Checkpointed pause/resume, worker processes with memory/time limits, encrypted local project store | 1 |
 | Signed and notarised Windows/macOS builds, packet-capture release tests | 1 |
 | Slack workflow-step decoding (inline step exports, code-bearing steps) needed to reproduce every CRANQ reference value | 1–2 |
-| PDF/DOCX/XLSX/PPTX text extraction, SQLite profiling, Git history, Jira/Linear/accounting connectors | 2 |
+| SQLite profiling, Jira/Linear/accounting connectors, OCR for scanned PDFs | 2 |
 | Owner PDF (`Your-Data-Map-YYYY-MM-DD.pdf`) | 2 |
 | Quality profiler, narrative dossier, disclosure manifest, `age` X25519 encryption to `Assessment-<id>.dpm.age` | 2 |
 | Operator report reader | 2 |

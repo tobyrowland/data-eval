@@ -172,6 +172,8 @@ pub struct Item {
 #[serde(rename_all = "snake_case")]
 pub enum Reason {
     NoParserInThisRelease,
+    /// A document with no text layer (a scanned image) or none we can decode.
+    NoReadableText,
     PasswordProtected,
     PermissionDenied,
     OnlineOnlyPlaceholder,
@@ -195,6 +197,7 @@ impl Reason {
     pub fn explain(&self) -> &'static str {
         match self {
             Reason::NoParserInThisRelease => "contents need a parser that is not in this release",
+            Reason::NoReadableText => "no readable text (a scanned image, or text we can't decode)",
             Reason::PasswordProtected => "password protected; add a locally decrypted export",
             Reason::PermissionDenied => "the operating system denied read access",
             Reason::OnlineOnlyPlaceholder => "online-only placeholder; make a local copy first",

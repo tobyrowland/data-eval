@@ -418,7 +418,7 @@
 
       const en = l.english_percent;
       const notes = [];
-      if (l.unreadable_documents) notes.push(`${num(l.unreadable_documents)} PDF and Office ${l.unreadable_documents === 1 ? "document is" : "documents are"} not included yet: reading their text arrives in a later release`);
+      if (l.unreadable_documents) notes.push(`${num(l.unreadable_documents)} PDF and Office ${l.unreadable_documents === 1 ? "document has" : "documents have"} no text we could read (scanned pages, protected files or old .doc/.xls/.ppt formats)`);
       if (l.sampled_documents) notes.push(`${num(l.sampled_documents)} long ${l.sampled_documents === 1 ? "document was" : "documents were"} sampled from the start (first 256 KB)`);
       if (l.code_or_data_files) notes.push(`${num(l.code_or_data_files)} code and data files (such as .js, .json, .csv and .log) were skipped`);
       notes.push("Slack bot and integration messages, code blocks and emoji codes are left out, so the mix reflects what people wrote");
@@ -929,7 +929,7 @@
     const gitGap = ["github", "bitbucket", "gitlab", "git"].some((g) => gapIds.has(g));
     if (!gitGap && (map.sources || []).some((s) => s.snapshot_only)) tips.push("Clone code repositories with their history (git clone): commit messages link conversations to the code they led to.");
     if (t.tokens && t.machine_tokens * 4 > t.tokens) tips.push(`${pct(t.machine_tokens, t.tokens)}% of the text is automated (bots, notifications, newsletters). Human conversation is what buyers value.`);
-    if (ev.not_evaluated.pdf_and_office_files) tips.push(`${num(ev.not_evaluated.pdf_and_office_files)} PDF and Office files aren't evaluated yet; a later release reads their text.`);
+    if (ev.not_evaluated.pdf_and_office_files) tips.push(`${num(ev.not_evaluated.pdf_and_office_files)} PDF and Office files have no text we could read: scanned pages, password-protected files or old .doc/.xls/.ppt formats. Exporting them again as text PDFs or .docx/.xlsx adds them.`);
     const todo = (map.sources || []).filter((s) => !s.in_selection && (s.links || 0) > 50 && !gapIds.has(s.id)).slice(0, 2);
     if (todo.length) tips.push(`Add ${todo.map((s) => esc(s.name)).join(" and ")}: your data links to ${todo.length === 1 ? "it" : "them"} often, so ${todo.length === 1 ? "its" : "their"} exports would extend these conversations.`);
     host.innerHTML = `

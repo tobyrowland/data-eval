@@ -677,7 +677,11 @@ pub struct CiLog {
 /// Recognises a CI log (GitHub Actions, GitLab, Jenkins, Bitbucket
 /// Pipelines) and reads whether it passed and which commit it built.
 pub fn ci_log(text: &str) -> Option<CiLog> {
-    let head = &text[..text.len().min(64 * 1024)];
+    let mut cut = text.len().min(64 * 1024);
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let head = &text[..cut];
     let gha = head.contains("##[") && gha_ts_re().is_match(head);
     let gitlab = head.contains("Running with gitlab-runner");
     let jenkins = head.contains("Started by ") && text.contains("Finished: ");
@@ -881,5 +885,8 @@ mod tests {
         assert_eq!(c.shas, vec!["1a2b3c4d"]);
         assert_eq!(c.year, Some(2024));
         assert!(ci_log("just some notes about ##[ things").is_none());
+        // A long text with a multi-byte character across the 64 KB mark.
+        let long = format!("{}é{}", "a".repeat(64 * 1024 - 1), "b".repeat(10));
+        assert!(ci_log(&long).is_none());
     }
 }

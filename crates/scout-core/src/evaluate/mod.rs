@@ -26,7 +26,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-pub const METHOD: &str = "Every readable document is read in full on this computer. Tokens are estimated from words (about 1.33 tokens per word; characters for Chinese, Japanese and similar scripts). Usable tokens are written by people, score at least 0.5 for text quality (word shape, symbols, repetition, function words) and are not exact or near duplicates (MinHash, 70% similarity). Text written before 2023 is counted separately because it is unlikely to be AI-generated. PDF, Office, image, audio and video files are counted but not evaluated yet.";
+pub const METHOD: &str = "Every readable document is read in full on this computer. Tokens are estimated from words (about 1.33 tokens per word; characters for Chinese, Japanese and similar scripts). Usable tokens are written by people, score at least 0.5 for text quality (word shape, symbols, repetition, function words) and are not exact or near duplicates (MinHash, 70% similarity). Text written before 2023 is counted separately because it is unlikely to be AI-generated. Word, PowerPoint, Excel, OpenDocument and PDF files are read for their text (spreadsheet cells count as structured data); scanned PDFs, protected files and legacy .doc/.xls/.ppt files, and images, audio and video, are counted but not evaluated.";
 
 /// What a document is, for training purposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Default)]
@@ -89,6 +89,8 @@ pub struct Evaluator {
     pub links: links::Links,
     /// Messages already linked (overlapping exports repeat them).
     linked_msgs: HashSet<u64>,
+    /// PDF, Office and OpenDocument files whose text was read.
+    documents_read: u64,
 }
 
 impl std::fmt::Debug for Evaluator {
@@ -883,6 +885,10 @@ impl Evaluator {
                 _ => {}
             }
         }
+        // Documents whose text was read are evaluated; the rest (scanned,
+        // protected, legacy binary Office) are not.
+        not.documents_read = self.documents_read;
+        not.pdf_and_office_files = not.pdf_and_office_files.saturating_sub(self.documents_read);
         let episodes = std::mem::take(&mut self.links).finish();
         Evaluation {
             episodes,
@@ -1025,7 +1031,10 @@ pub struct EvalTotals {
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct NotEvaluated {
+    /// PDF and Office files with no text we could read.
     pub pdf_and_office_files: u64,
+    /// PDF and Office files whose text was read and evaluated.
+    pub documents_read: u64,
     pub media_files: u64,
 }
 
@@ -1115,6 +1124,8 @@ enum SinkKind {
     },
     /// A CSV that may be a ticket tracker's export.
     Csv(Vec<u8>),
+    /// A PDF, Office or OpenDocument file, read whole.
+    Document(Vec<u8>, Format),
 }
 
 const MAX_TEXT: usize = 8 * 1024 * 1024;
@@ -1129,6 +1140,14 @@ impl Sink {
         }
         let ext = crate::detect::extension(path);
         let kind = match format {
+            Format::Pdf | Format::OfficeDocument | Format::OpenDocument => {
+                return Some(Sink {
+                    ev: ev.clone(),
+                    col,
+                    path: path.to_string(),
+                    kind: SinkKind::Document(Vec::new(), format),
+                })
+            }
             Format::Csv => {
                 return Some(Sink {
                     ev: ev.clone(),
@@ -1191,6 +1210,11 @@ impl Sink {
                     buf.extend_from_slice(bytes);
                 }
             }
+            SinkKind::Document(buf, _) => {
+                if buf.len() <= crate::analyze::docs::MAX_DOCUMENT_BYTES {
+                    buf.extend_from_slice(bytes);
+                }
+            }
         }
     }
 
@@ -1199,6 +1223,23 @@ impl Sink {
     pub fn finish(self, bytes_read: u64) -> bool {
         let col = self.col;
         match self.kind {
+            SinkKind::Document(buf, format) => {
+                if buf.len() > crate::analyze::docs::MAX_DOCUMENT_BYTES {
+                    return false;
+                }
+                let Some(doc) = crate::analyze::docs::extract(format, &buf) else {
+                    return false;
+                };
+                if let Ok(mut e) = self.ev.lock() {
+                    e.documents_read += 1;
+                    if doc.sheet {
+                        e.submit(col, Kind::Structured, &doc.text, true, None, 0);
+                    } else {
+                        e.text_links(col, &self.path, &doc.text);
+                        e.submit(col, Kind::Document, &doc.text, true, None, 0);
+                    }
+                }
+            }
             SinkKind::Csv(buf) => {
                 if buf.len() > MAX_CSV {
                     return false;

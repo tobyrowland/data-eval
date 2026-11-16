@@ -200,3 +200,35 @@ fn working_minds_report_is_complete_parseable_and_content_free() {
         assert!(!md.contains(leak), "leaked {leak}");
     }
 }
+
+#[test]
+fn word_and_powerpoint_files_are_read_and_legacy_files_are_not() {
+    let d = tempdir("eval-docs");
+    let docx = zip_bytes(&[
+        ("[Content_Types].xml", b"<Types/>"),
+        ("word/document.xml", b"<w:document><w:body><w:p><w:r><w:t>New starters pair with a buddy for their first week, set up their laptop and ship a small change to production by Friday.</w:t></w:r></w:p></w:body></w:document>"),
+    ]);
+    write(&d, "docs/handbook.docx", &docx);
+    let pptx = zip_bytes(&[("ppt/slides/slide1.xml", b"<p:sld><a:p><a:r><a:t>The roadmap for next year: launch the pricing page and move billing to the new provider.</a:t></a:r></a:p></p:sld>")]);
+    write(&d, "docs/roadmap.pptx", &pptx);
+    write(
+        &d,
+        "docs/old.doc",
+        b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1 legacy binary",
+    );
+    let inv = scan(&[d.join("docs")], ScanOptions::default());
+    let ev = evaluate(&inv, None, &mut |_| {});
+    let docs = ev
+        .rows
+        .iter()
+        .find(|r| r.kind == Kind::Document)
+        .expect("document row");
+    assert_eq!(docs.documents, 2, "{docs:?}");
+    assert!(docs.usable_tokens > 20, "{docs:?}");
+    assert_eq!(ev.not_evaluated.documents_read, 2);
+    assert_eq!(ev.not_evaluated.pdf_and_office_files, 1);
+    // The normal scan reads them too: examined, with their words counted.
+    let map = scout_core::build_data_map(&inv);
+    assert_eq!(map.languages.unreadable_documents, 1);
+    assert!(serde_json::to_string(&ev).unwrap().find("buddy").is_none());
+}
