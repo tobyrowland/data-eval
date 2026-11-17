@@ -712,3 +712,12 @@ body.dragging .drag-veil-card { transform: scale(1); }
 .lw-test small { flex: 1; min-width: 220px; }
 .lw-testnote { display: flex; gap: 12px; align-items: center; }
 .lw-testnote > span { flex: 1; }
+
+.lw-tiers { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.lw-tier { font-size: 12.5px; padding: 3px 10px; border-radius: 999px; font-weight: 600; }
+.lw-tier.g { background: #FBEFC8; color: #7A5A00; }
+.lw-tier.s { background: #E6EAF0; color: #46546A; }
+.lw-tier.b { background: #F3E2D3; color: #7A4A22; }
+.lw-how { margin-top: 8px; font-size: 13px; color: var(--ink-2); }
+.lw-how summary { cursor: pointer; color: var(--teal); }
+.lw-how p { margin: 6px 0 0; }

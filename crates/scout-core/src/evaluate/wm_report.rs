@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::fmt::Write as _;
 
-pub const SCORING_VERSION: &str = "wm-scores-2026.11.2";
+pub const SCORING_VERSION: &str = "wm-scores-2026.11.3";
 
 /// A 0–100 score with what it rests on.
 #[derive(Debug, Clone, Serialize)]
@@ -106,7 +106,9 @@ pub fn scores(map: &DataMap, ev: &Evaluation) -> Vec<Score> {
     }
     let volume = ((t.usable_tokens as f64 + 1.0).log10() / 8.0 * 100.0).clamp(0.0, 100.0);
     let e = &ev.episodes;
-    let points = e.complete as f64 + 0.5 * e.partial as f64 + 0.2 * e.linked_discussion as f64;
+    // Weighted by quality tier: a gold trajectory counts fully.
+    let points =
+        e.gold.pieces as f64 + 0.5 * e.silver.pieces as f64 + 0.15 * e.bronze.pieces as f64;
     let linkage = ((points + 1.0).log10() / 4.0 * 100.0).clamp(0.0, 100.0);
     vec![
         Score {
@@ -173,11 +175,12 @@ pub fn scores(map: &DataMap, ev: &Evaluation) -> Vec<Score> {
             score: linkage as u32,
             weight: 0.10,
             basis: format!(
-                "{} trajectories ({} complete, {} partial, {} linked discussion); 100 = 10k complete (log scale)",
+                "{} trajectories ({} gold, {} silver, {} bronze; {} complete); gold 1, silver 0.5, bronze 0.15; 100 = 10k gold (log scale)",
                 compact(e.episodes),
-                compact(e.complete),
-                compact(e.partial),
-                compact(e.linked_discussion)
+                compact(e.gold.pieces),
+                compact(e.silver.pieces),
+                compact(e.bronze.pieces),
+                compact(e.complete)
             ),
         },
         Score {
@@ -482,6 +485,17 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
         "\nTrajectories by records: 2: {}, 3–5: {}, 6–20: {}, 21+: {}.",
         e.by_size[0], e.by_size[1], e.by_size[2], e.by_size[3]
     );
+    md.push_str("\nQuality tiers. Each trajectory is scored 0–100: completeness up to 40 (complete 40; why + what 25; other two-part 15; linked discussion 5), steps up to 20 (12+ records), systems up to 15 (5 per system beyond the first, up to 3), human reasoning up to 15 (tokens, log scale, 10,000+), written before 2023: 10. Gold is 70+, silver 45–69, bronze below 45.\n\n| Tier | Trajectories | Tokens |\n|---|---|---|\n");
+    for (name, t) in [
+        ("Gold", &e.gold),
+        ("Silver", &e.silver),
+        ("Bronze", &e.bronze),
+    ] {
+        let _ = writeln!(md, "| {name} | {} | {} |", t.pieces, t.tokens);
+    }
+    if let Some(mean) = e.score_sum.checked_div(e.episodes) {
+        let _ = writeln!(md, "\nMean score: {mean}.");
+    }
     if !e.system_pairs.is_empty() {
         md.push_str("\n| Systems linked | Trajectories |\n|---|---|\n");
         for p in &e.system_pairs {

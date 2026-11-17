@@ -108,6 +108,13 @@ fn one_piece_of_work_across_five_systems_is_one_complete_episode() {
     assert_eq!((e.ci_logs, e.ci_passed), (1, 1));
     assert_eq!(e.episodes, 1, "{e:#?}");
     assert_eq!(e.complete, 1);
+    // Complete, six records across five systems, from 2021: gold.
+    assert_eq!(
+        (e.gold.pieces, e.silver.pieces, e.bronze.pieces),
+        (1, 0, 0),
+        "{e:#?}"
+    );
+    assert!(e.shapes[0].mean_score >= 70);
     assert_eq!(e.multi_system, 1);
     assert_eq!(e.pre_llm, 1);
     // Slack thread, email thread, two commits, the ticket and the CI log.
@@ -166,6 +173,9 @@ fn without_results_nothing_is_complete_and_the_gaps_say_what_would_complete_it()
     assert_eq!(e.episodes, 1, "{e:#?}");
     assert_eq!(e.complete, 0);
     assert_eq!((e.with_why, e.with_action, e.with_outcome), (1, 1, 0));
+    // Without a result it can't be gold.
+    assert_eq!(e.gold.pieces, 0, "{e:#?}");
+    assert_eq!(e.silver.pieces + e.bronze.pieces, 1);
     let gap = |id: &str| {
         e.gaps
             .iter()

@@ -1034,7 +1034,8 @@
     const shapes = (e.shapes || []).map((s) => `<tr>
         <td>${s.systems.map(esc).join(" + ")}</td>
         <td class="lw-ok">${s.why ? "✓" : "—"}</td><td class="lw-ok">${s.action ? "✓" : "—"}</td><td class="lw-ok">${s.outcome ? "✓" : "<b class=\"lw-miss\">missing</b>"}</td>
-        <td class="num">${num(s.episodes)}</td></tr>`).join("");
+        <td class="num">${num(s.episodes)}</td>
+        <td class="num">${s.mean_score != null ? `<span class="lw-tier ${s.mean_score >= 70 ? "g" : s.mean_score >= 45 ? "s" : "b"}">${s.mean_score}</span>` : "—"}</td></tr>`).join("");
     host.innerHTML = `
       ${ev.incomplete ? `<div class="pc-note warn"><span><b>Stopped before the end.</b> These numbers cover only what was read.</span></div>` : ""}
       ${e.test_tickets ? `<div class="pc-note warn lw-testnote"><span><b>Includes ${num(e.test_tickets)} fake test tickets.</b> Linked work that depends on them isn't real. To remove them, open <b>Your files</b> and remove the "Working Minds TEST Jira export" item${handlers.testFile ? ` (saved in Documents › Working Minds)` : ""}. Remove it before sending your report or creating a data pack.</span>${handlers.testFile ? `<button class="btn ghost small" data-lw-showtest>Show file</button>` : ""}</div>` : ""}
@@ -1042,6 +1043,15 @@
         <div class="lw-headline">
           <h3><b>${num(n)}</b> pieces of linked work · <b>${num(e.complete)}</b> complete</h3>
           <p>${why}</p>
+          ${n && e.gold ? `<div class="lw-tiers">
+            <span class="lw-tier g" title="Score 70 or more"><b>${num(e.gold.pieces)}</b> gold</span>
+            <span class="lw-tier s" title="Score 45–69"><b>${num(e.silver.pieces)}</b> silver</span>
+            <span class="lw-tier b" title="Score below 45"><b>${num(e.bronze.pieces)}</b> bronze</span>
+            <span class="muted small">average score ${num(Math.round(e.score_sum / n))} of 100</span>
+          </div>
+          <details class="lw-how"><summary>How pieces are scored</summary>
+            <p>Each piece of linked work scores up to 100: <b>40</b> for being complete (why, what was done and how it turned out), <b>20</b> for its number of steps, <b>15</b> for the systems it spans, <b>15</b> for how much people wrote, and <b>10</b> if it's from before 2023. Gold is 70 or more, silver 45–69, bronze below 45. Buyers value gold pieces most.</p>
+          </details>` : ""}
         </div>
         <div class="lw-parts">
           ${part("Why", e.with_why, "a request, ticket or discussion")}
@@ -1053,7 +1063,7 @@
         <ol class="lw-steps">${steps}</ol>
         <p class="muted small">"Up to" assumes the export contains the items your data mentions and, for tickets, that they were resolved. The numbers update when you add the files.</p></div>` : ""}
       ${shapes ? `<div class="card tv-card"><div class="tv-sub">What your linked work looks like</div>
-        <div class="tbl-wrap"><table class="tbl lw-tbl"><thead><tr><th>Systems joined</th><th>Why</th><th>What was done</th><th>How it turned out</th><th class="num">Pieces</th></tr></thead><tbody>${shapes}</tbody></table></div>
+        <div class="tbl-wrap"><table class="tbl lw-tbl"><thead><tr><th>Systems joined</th><th>Why</th><th>What was done</th><th>How it turned out</th><th class="num">Pieces</th><th class="num">Avg score</th></tr></thead><tbody>${shapes}</tbody></table></div>
         <p class="muted small">Records are joined only when they cite the same ticket, pull request, commit, document or email thread. ${e.commits ? `Read: ${num(e.commits)} commits` : ""}${e.tickets ? ` · ${num(e.tickets)} tickets` : ""}${e.ci_logs ? ` · ${num(e.ci_logs)} build logs` : ""}</p></div>` : ""}`;
     confirmClick(host.querySelector("[data-lw-test]"), "Create fake test tickets?", () => handlers.onMakeTestJira && handlers.onMakeTestJira());
     const showTest = host.querySelector("[data-lw-showtest]");
