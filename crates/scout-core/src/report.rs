@@ -40,6 +40,9 @@ pub struct DataMap {
     pub company: Option<Company>,
     /// Content-derived activity per calendar month (YYYY-MM), all collections.
     pub activity: BTreeMap<String, u64>,
+    /// Records per month for each platform, the company's active span, and
+    /// where a source starts late, stops early or has a hole.
+    pub timeline: crate::coverage::Coverage,
     pub stopped_by_user: bool,
     pub languages: LanguageSummary,
     /// Systems this data comes from or refers to, with the evidence for each.
@@ -113,6 +116,9 @@ pub struct CollectionSummary {
     /// Working Minds test data).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub trackers: Vec<(&'static str, u64, u64)>,
+    /// Records per month ("YYYY-MM") in this item, by platform.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub monthly: crate::coverage::ItemMonths,
     pub by_status: BTreeMap<Status, u64>,
     pub structured_records: u64,
     pub expanded_bytes: u64,
@@ -886,7 +892,58 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
                 ),
             },
         };
+        let plats = platforms_of(inv, c, &snapshots, &attachment_cols, &teams_cols);
+        let mut monthly: crate::coverage::ItemMonths = BTreeMap::new();
+        let mut merge = |p: &'static str, m: &BTreeMap<String, u64>| {
+            let e = monthly.entry(p).or_default();
+            for (k, v) in m {
+                *e.entry(k.clone()).or_default() += v;
+            }
+        };
+        for s in &slack {
+            merge("slack", &s.monthly_activity);
+        }
+        if let Some(t) = &teams {
+            merge("teams", &t.monthly_activity);
+        }
+        if let Some(d) = &discord {
+            merge("discord", &d.monthly_activity);
+        }
+        for (source, m) in &inv.text[i].months {
+            let p: &'static str = match *source {
+                "commits" => plats
+                    .iter()
+                    .copied()
+                    .find(|p| matches!(*p, "github" | "bitbucket" | "gitlab"))
+                    .unwrap_or("git"),
+                "documents" => {
+                    if plats.contains(&"google_drive") {
+                        "google_drive"
+                    } else {
+                        plats
+                            .iter()
+                            .copied()
+                            .find(|p| {
+                                !matches!(
+                                    *p,
+                                    "email"
+                                        | "slack"
+                                        | "teams"
+                                        | "discord"
+                                        | "jira"
+                                        | "linear"
+                                        | "zendesk"
+                                )
+                            })
+                            .unwrap_or("other")
+                    }
+                }
+                other => other,
+            };
+            merge(p, m);
+        }
         collections.push(CollectionSummary {
+            monthly,
             display_label: match snapshots.get(&c.id) {
                 Some(snap) => snap.display_label(),
                 None => display_label_for(c, &inv.text[i]),
@@ -922,7 +979,7 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
                 })
                 .collect(),
             slack,
-            platforms: platforms_of(inv, c, &snapshots, &attachment_cols, &teams_cols),
+            platforms: plats,
             overlaps: overlaps[i].clone(),
             obsolete_given: obsolete[i].clone(),
         });
@@ -1098,6 +1155,12 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
     }
     prep.sort_by_key(|p| std::cmp::Reverse(p.0));
 
+    let timeline = crate::coverage::build(
+        &collections
+            .iter()
+            .map(|c| (c.display_label.clone(), c.monthly.clone()))
+            .collect::<Vec<_>>(),
+    );
     let activity: BTreeMap<String, u64> = collections
         .iter()
         .flat_map(|c| {
@@ -1142,6 +1205,7 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
         teams_files: teams_files(inv),
         company: detect_company(inv, &linkages),
         activity,
+        timeline,
         stopped_by_user: inv.cancelled,
         languages,
         sources: source_entries(inv),

@@ -294,3 +294,30 @@ fn a_jira_export_is_shown_as_jira_on_the_map_and_test_data_is_marked() {
         "Jira should no longer be 'not collected'"
     );
 }
+
+#[test]
+fn coverage_over_time_has_a_row_per_source_from_dates_in_the_content() {
+    let inv = fixture("coverage", true, true);
+    let map = scout_core::build_data_map(&inv);
+    let t = &map.timeline;
+    let row = |p: &str| {
+        t.rows.iter().find(|r| r.platform == p).unwrap_or_else(|| {
+            panic!(
+                "{p}: {:?}",
+                t.rows.iter().map(|r| r.platform).collect::<Vec<_>>()
+            )
+        })
+    };
+    // Slack messages, emails (Date headers), commits (git history) and
+    // tickets (Created column), all March 2021 in the fixture.
+    for p in ["slack", "email", "bitbucket", "jira"] {
+        let r = row(p);
+        assert_eq!(r.first.as_deref(), Some("2021-03"), "{p}: {:?}", r.months);
+        assert!(r.dense && !r.items.is_empty());
+    }
+    assert_eq!(row("bitbucket").total, 4); // commits
+    assert_eq!(row("jira").total, 3); // tickets
+    assert_eq!(row("email").total, 2);
+    assert_eq!(t.company_first.as_deref(), Some("2021-03"));
+    assert!(t.gaps.is_empty(), "{:?}", t.gaps);
+}

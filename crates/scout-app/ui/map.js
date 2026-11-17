@@ -296,6 +296,8 @@
         </div>
       </section>
 
+      <div id="timeline-host" class="reveal" style="animation-delay:150ms">${timelineCard(map)}</div>
+
       <section class="section reveal" style="animation-delay:250ms">
         <div class="section-head">
           <div><h2>Your platforms</h2><p>What you've collected from each platform, the items in it and their stats, and what your data points to that's still missing. Remove duplicates and anything that isn't yours.</p></div>
@@ -510,6 +512,14 @@
     renderTraining(root.querySelector("#training-value"), map, extra.evaluation || null, handlers, extra.evaluating || null);
     renderLinkedWork(root.querySelector("#linked-work"), map, extra.evaluation || null, handlers, extra.evaluating || null);
     renderTvCard(root.querySelector("#tv-card"), map, extra.evaluation || null, extra.evaluating || null, handlers);
+    const tlHost = root.querySelector("#timeline-host");
+    if (tlHost) tlHost.onclick = (e) => {
+      const row = e.target.closest(".tl-click");
+      if (!row) return;
+      const p = row.dataset.tl;
+      if (openTimeline.has(p)) openTimeline.delete(p); else openTimeline.add(p);
+      tlHost.innerHTML = timelineCard(map);
+    };
     root.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
     const send = root.querySelector('[data-act="send-report"]');
     if (send) send.onclick = () => handlers.onSendReport && handlers.onSendReport();
@@ -656,6 +666,9 @@
       const facts = [`${num(list.length)} ${list.length === 1 ? "item" : "items"}`, `${num(files)} files`, bytes(size)];
       const notes = [];
       let partial = false;
+      for (const g of ((map.timeline || {}).gaps || []).filter((g) => g.platform === p)) {
+        notes.push(`<div class="pc-note warn"><span><b>Coverage:</b> ${esc(g.text)}</span></div>`);
+      }
       if (firsts.length) facts.push(`${firsts[0]} → ${lasts[lasts.length - 1]}`);
       if (p === "slack") { const m = list.reduce((a, c) => a + (c.slack || []).reduce((x, s) => x + s.message_records - (s.records_also_in_other_exports || 0), 0), 0); if (m) facts.push(`${num(m)} messages, each counted once`); }
       if (p === "discord") {
@@ -972,6 +985,65 @@
       ${whenWritten(ev)}
       ${tips.length ? `<div class="card tv-card"><div class="step-other ep-gaps"><b>More ways to raise the value</b><ul>${tips.map((x) => `<li>${x}</li>`).join("")}</ul></div></div>` : ""}`;
     host.querySelector('[data-tv="run"]').onclick = () => handlers.onEvaluate && handlers.onEvaluate();
+  }
+
+  // Platforms whose item rows are open in the coverage chart.
+  const openTimeline = new Set();
+
+  /** Coverage over time: one row per platform, month by month, the
+   *  company's active span shaded, and gaps called out in words. */
+  function timelineCard(map) {
+    const t = map.timeline || {};
+    const rows = (t.rows || []).filter((r) => r.total > 0);
+    if (!rows.length) return "";
+    const idx = (k) => { const [y, m] = k.split("-").map(Number); return y * 12 + m - 1; };
+    const keys = rows.flatMap((r) => Object.keys(r.months)).filter((k) => /^\d{4}-\d{2}$/.test(k));
+    // The axis spans the company's active period, widened to whole years
+    // and to any source that reaches beyond it (within reason).
+    let lo = t.company_first ? idx(t.company_first) : Math.min(...keys.map(idx));
+    let hi = t.company_last ? idx(t.company_last) : Math.max(...keys.map(idx));
+    rows.forEach((r) => { if (r.first) lo = Math.min(lo, idx(r.first)); if (r.last) hi = Math.max(hi, idx(r.last)); });
+    lo = Math.floor(lo / 12) * 12; hi = Math.floor(hi / 12) * 12 + 11;
+    const n = hi - lo + 1;
+    const W = 1000, H = 18;
+    const cw = W / n;
+    const cf = t.company_first ? idx(t.company_first) : null, cl = t.company_last ? idx(t.company_last) : null;
+    const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const unit = (p) => (["slack", "teams", "discord"].includes(p) ? "messages" : p === "email" ? "emails" : ["jira", "linear", "zendesk"].includes(p) ? "tickets" : ["github", "gitlab", "bitbucket", "git"].includes(p) ? "commits" : "documents");
+    const strip = (months, p, color) => {
+      const max = Math.max(1, ...Object.values(months));
+      let cells = "";
+      for (let i = 0; i < n; i++) {
+        const k = `${String(Math.floor((lo + i) / 12)).padStart(4, "0")}-${String(((lo + i) % 12) + 1).padStart(2, "0")}`;
+        const v = months[k] || 0;
+        if (!v) continue;
+        const op = 0.18 + 0.82 * Math.sqrt(v / max);
+        cells += `<rect x="${(i * cw).toFixed(2)}" y="2" width="${Math.max(cw - 0.6, 0.8).toFixed(2)}" height="${H - 4}" fill="${color}" opacity="${op.toFixed(2)}"><title>${MON[(lo + i) % 12]} ${Math.floor((lo + i) / 12)}: ${num(v)} ${unit(p)}</title></rect>`;
+      }
+      const band = cf != null && cl != null ? `<rect x="${((cf - lo) * cw).toFixed(1)}" y="0" width="${((cl - cf + 1) * cw).toFixed(1)}" height="${H}" fill="var(--surface-2)"/>` : "";
+      return `<svg class="tl-strip" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">${band}${cells}</svg>`;
+    };
+    let ticks = "";
+    for (let y = lo / 12; y <= hi / 12; y++) ticks += `<span style="left:${(((y * 12 - lo) / n) * 100).toFixed(2)}%">${y}</span>`;
+    const span = (a, b) => (a && b ? `${a} → ${b}` : "");
+    const body = rows.map((r) => {
+      const color = PLATFORM_COLOR[r.platform] || PLATFORM_COLOR.other;
+      const open = openTimeline.has(r.platform);
+      const gap = (t.gaps || []).some((g) => g.platform === r.platform);
+      const items = open && r.items.length > 1 ? r.items.map((it) => `<div class="tl-row tl-item"><div class="tl-label"><span title="${esc(it.label)}">${esc(trunc(it.label, 34))}</span><small class="muted">${esc(span(it.first, it.last))}</small></div>${strip(it.months, r.platform, color)}</div>`).join("") : "";
+      return `<div class="tl-row${r.items.length > 1 ? " tl-click" : ""}" data-tl="${esc(r.platform)}">
+          <div class="tl-label"><b>${r.items.length > 1 ? `<span class="tl-caret">${open ? "▾" : "▸"}</span>` : ""}${esc(r.name)}${gap ? ` <span class="tl-warn" title="See the note below">⚠</span>` : ""}</b><small class="muted">${num(r.total)} ${unit(r.platform)} · ${esc(span(r.first, r.last))}</small></div>
+          ${strip(r.months, r.platform, color)}</div>${items}`;
+    }).join("");
+    const gaps = (t.gaps || []).map((g) => `<li>⚠ ${esc(g.text)}</li>`).join("");
+    return `<section class="card tl-card">
+      <div class="card-head"><div><h3>Coverage over time</h3><p>Messages, emails, commits, tickets and documents per month, from dates inside your data. The shaded band is when your company was active. Look for a source that starts late, stops early or has gaps.</p></div></div>
+      <div class="tl-scroll"><div class="tl-grid">
+        <div class="tl-row tl-axis"><div class="tl-label"></div><div class="tl-ticks">${ticks}</div></div>
+        ${body}
+      </div></div>
+      ${gaps ? `<ul class="tl-gaps">${gaps}</ul>` : `<p class="muted small tl-ok">No source starts late, stops early or has a long gap compared with the rest of your data.</p>`}
+    </section>`;
   }
 
   /** When the text was written: tokens per year by kind, and what has no

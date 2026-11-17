@@ -197,8 +197,16 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
      Linked work tab, the report and the send panel warn that the figures
      include fake tickets. `working-minds test-jira <inputs> --out x.csv`
      does the same from the command line.
-   - **Your files:** the map, Your platforms, All items and Files by format
-     (formats and coverage), for housekeeping.
+   - **Your files:** the map, **Coverage over time**, Your platforms, All
+     items and Files by format (formats and coverage), for housekeeping.
+     Coverage over time shows one row per platform (click for one row per
+     item), month by month, shaded by how busy each month was, against the
+     company's active span. Months come from dates inside the data: chat
+     timestamps, email Date headers (or the mbox From line), commit times
+     from `.git` folders, ticket Created dates and document metadata. For
+     chat, email, code history and tickets it warns, in words and on the
+     platform's card, when a source starts or stops more than 3 months
+     away from the rest, has a hole of 3+ months, or is patchy.
    - **Details:** the training value tables, other ways to raise the value,
      **When it was written** (tokens per year by kind, a 2023 marker, and
      the undated text by kind), activity over time and languages.
