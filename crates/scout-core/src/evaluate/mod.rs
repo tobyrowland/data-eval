@@ -396,6 +396,9 @@ impl Evaluator {
                 .record(unit, "slack", Role::Discussion, year, tokens);
             self.links.time(unit, time);
             self.links.add_found(unit, found);
+            if !bot {
+                self.links.add_cues(unit, links::work_cues(text));
+            }
             for k in files {
                 self.links.add_ref(unit, k, "documents");
             }
@@ -429,6 +432,10 @@ impl Evaluator {
             .record(unit, "teams", Role::Discussion, year, tokens);
         self.links.time(unit, time);
         self.links.add_found(unit, found);
+        self.links.add_cues(
+            unit,
+            links::work_cues(&crate::analyze::language::strip_markup(body)),
+        );
     }
 
     /// Discord messages citing other systems become records.
@@ -458,6 +465,7 @@ impl Evaluator {
             .record(unit, "discord", Role::Discussion, year, tokens_of(text));
         self.links.time(unit, time);
         self.links.add_found(unit, found);
+        self.links.add_cues(unit, links::work_cues(text));
     }
 
     /// A document-like file: it can be cited by its title or (for Slack
@@ -500,6 +508,10 @@ impl Evaluator {
                 self.links.add_ref(unit, k, "git");
             }
             self.links.note_ci(ci.passed);
+            if ci.passed == Some(false) {
+                // A failed build: someone has something to fix.
+                self.links.add_cues(unit, [2, 0, 0, 0, 0, 0, 0]);
+            }
             return true;
         }
         let found = self.links.find(text);
@@ -510,6 +522,7 @@ impl Evaluator {
         self.links
             .record(unit, doc_system(path), Role::Action, None, tokens_of(text));
         self.links.add_found(unit, found);
+        self.links.add_cues(unit, links::work_cues(text));
         false
     }
 
@@ -543,6 +556,7 @@ impl Evaluator {
             }
             let found = self.links.find(&c.message);
             self.links.add_found(unit, found);
+            self.links.add_cues(unit, links::commit_cues(&c.message));
             self.links.note_commit();
             self.submit(col, Kind::Code, &c.message, true, year, 0);
         }
@@ -600,6 +614,7 @@ impl Evaluator {
             .map(|(i, _)| i)
             .collect();
         let status = col_of(&["status", "state"]);
+        let issue_type = col_of(&["issue type", "issuetype", "type", "ticket type"]);
         let resolved = col_of(&[
             "resolved",
             "resolution date",
@@ -658,6 +673,10 @@ impl Evaluator {
             }
             let found = self.links.find(&body);
             self.links.add_found(unit, found);
+            self.links.add_cues(unit, links::work_cues(&body));
+            if let Some(t) = issue_type.and_then(|c| r.get(c)) {
+                self.links.add_cues(unit, links::issue_type_cues(t));
+            }
             self.links.note_ticket();
             if test_flag
                 .and_then(|c| r.get(c))
@@ -1374,6 +1393,11 @@ fn submit_mail(ev: &Arc<Mutex<Evaluator>>, col: u32, emails: Vec<mail::Email>) {
                 let mut found = e.links.find(&m.text);
                 found.extend(e.links.find(&m.subject));
                 e.links.add_found(unit, found);
+                let mut cues = links::work_cues(&m.text);
+                for (a, b) in cues.iter_mut().zip(links::work_cues(&m.subject)) {
+                    *a = a.saturating_add(b);
+                }
+                e.links.add_cues(unit, cues);
             }
             let kind = if m.automated {
                 Kind::Machine

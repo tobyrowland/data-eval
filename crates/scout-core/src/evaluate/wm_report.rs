@@ -496,6 +496,16 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
     if let Some(mean) = e.score_sum.checked_div(e.episodes) {
         let _ = writeln!(md, "\nMean score: {mean}.");
     }
+    if !e.by_type.is_empty() {
+        md.push_str("\nTypes of work. Each trajectory gets one type from the evidence in its records: words in messages, emails, documents and commits (English word lists, at most 5 per type per record), conventional commit prefixes (fix:, feat:, chore: …, weighted 3), ticket types (Bug, Story, Incident …, weighted 5), Zendesk tickets (support), failed builds (bug fix) and links to Sentry, PagerDuty or Datadog (incident). The strongest type wins if it has at least 3 points and 40% of the evidence; otherwise the trajectory is mixed or unclear.\n\n| Type | Trajectories | Complete | Gold | Silver | Bronze | Tokens |\n|---|---|---|---|---|---|---|\n");
+        for t in &e.by_type {
+            let _ = writeln!(
+                md,
+                "| {} | {} | {} | {} | {} | {} | {} |",
+                t.name, t.pieces, t.complete, t.gold, t.silver, t.bronze, t.tokens
+            );
+        }
+    }
     if !e.system_pairs.is_empty() {
         md.push_str("\n| Systems linked | Trajectories |\n|---|---|\n");
         for p in &e.system_pairs {
