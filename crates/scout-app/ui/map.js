@@ -918,7 +918,7 @@
     (ev.rows || []).forEach((r) => { const p = platformOf(r.collection, r.kind); if (!groups.has(p)) groups.set(p, []); groups.get(p).push(r); });
     const order = [...groups.entries()].sort((a, b) => b[1].reduce((x, r) => x + r.usable_tokens, 0) - a[1].reduce((x, r) => x + r.usable_tokens, 0));
     const dots = (n) => `<span class="tv-dots v${n}" title="${["", "Low", "Medium", "High"][n]} value">${"●".repeat(n)}${"○".repeat(3 - n)}</span>`;
-    const years = (r) => (r.first_year ? (r.first_year === r.last_year ? `${r.first_year}` : `${r.first_year}–${r.last_year}`) : "—");
+    const years = (r) => (r.first_year ? (r.first_year === r.last_year ? `${r.first_year}` : `${r.first_year}–${r.last_year}`) : `<span class="muted">no date</span>`);
     const rows = order.map(([p, list]) => {
       const usable = list.reduce((x, r) => x + r.usable_tokens, 0);
       return `<tr class="tv-group"><td colspan="7"><b>${esc(p)}</b><span class="muted"> · ${compact(usable)} usable tokens</span></td></tr>` +
@@ -927,7 +927,7 @@
           <td class="num">${num(r.documents)}</td>
           <td class="num">${compact(r.tokens)}</td>
           <td class="num"><b>${compact(r.usable_tokens)}</b></td>
-          <td>${esc(years(r))}</td>
+          <td>${years(r)}</td>
           <td>${dots(r.value_band)}</td>
           <td class="tv-why">${esc(r.reason)}</td></tr>`).join("");
     }).join("");
@@ -954,7 +954,7 @@
           <div class="tv-headline">
             <span class="pill tv-${esc(ev.rating)}">${esc(rating)} training value</span>
             <h3>About <b>${compact(t.usable_tokens)}</b> usable tokens of human-written text</h3>
-            <p>${esc(ev.rating_reason)} ${t.conversation_tokens ? `Including ${compact(t.conversation_tokens)} of multi-turn conversation. ` : ""}${t.tokens ? `${pct(t.pre_llm_tokens, t.tokens)}% was written before 2023.` : ""}</p>
+            <p>${esc(ev.rating_reason)} ${t.conversation_tokens ? `Including ${compact(t.conversation_tokens)} of multi-turn conversation. ` : ""}${t.tokens - (t.undated_tokens || 0) > 0 ? `${pct(t.pre_llm_tokens, t.tokens - (t.undated_tokens || 0))}% of dated text was written before 2023.` : ""}${t.undated_tokens ? ` ${compact(t.undated_tokens)} tokens have no date (mostly code and documents).` : ""}</p>
           </div>
           <div class="tv-figures">
             <div><strong>${compact(t.tokens)}</strong><span>tokens in total</span></div>
@@ -969,8 +969,44 @@
           <tbody>${rows}</tbody></table></div>
         <div class="tv-foot"><span class="muted small">${esc(ev.method)} Evaluated in ${num(ev.seconds)}s.</span><button class="btn ghost small" data-tv="run">Evaluate again</button></div>
       </div>
+      ${whenWritten(ev)}
       ${tips.length ? `<div class="card tv-card"><div class="step-other ep-gaps"><b>More ways to raise the value</b><ul>${tips.map((x) => `<li>${x}</li>`).join("")}</ul></div></div>` : ""}`;
     host.querySelector('[data-tv="run"]').onclick = () => handlers.onEvaluate && handlers.onEvaluate();
+  }
+
+  /** When the text was written: tokens per year by kind, and what has no
+   *  date, so the "before 2023" figure can be checked. */
+  function whenWritten(ev) {
+    const d = ev.distributions || {};
+    const byYear = d.tokens_by_year_kind || {};
+    const years = Object.keys(byYear).map(Number).sort((a, b) => a - b);
+    if (!years.length && !Object.keys(d.undated_by_kind || {}).length) return "";
+    const kinds = ["conversation", "email", "document", "code", "structured", "machine"];
+    const label = { conversation: "Conversations", email: "Email", document: "Documents", code: "Code", structured: "Records and tables", machine: "Automated" };
+    const total = (m) => kinds.reduce((a, k) => a + (m[k] || 0), 0);
+    const undated = d.undated_by_kind || {};
+    // Years share one scale; the "no date" bar has its own (it can be far
+    // larger, mostly code), shown as the split by kind.
+    const max = Math.max(1, ...years.map((y) => total(byYear[y])));
+    const bar = (m, scale) => `<span class="ww-bar">${kinds.filter((k) => m[k]).map((k) => `<span style="width:${(m[k] * 100) / scale}%;background:${KIND_COLOR[k]}" title="${label[k]}: ${num(m[k])} tokens"></span>`).join("")}</span>`;
+    const rows = years.map((y, i) => `${y >= 2023 && (i === 0 || years[i - 1] < 2023) ? `<div class="ww-line"><span>2023: AI-written text becomes common</span></div>` : ""}
+      <div class="ww-row"><span class="ww-y">${y}</span>${bar(byYear[y], max)}<span class="ww-n">${compact(total(byYear[y]))}</span></div>`).join("");
+    // Per kind: years covered and the share before 2023.
+    const summary = ["conversation", "email", "document"].map((k) => {
+      const ys = years.filter((y) => byYear[y][k]);
+      if (!ys.length) return "";
+      const all = ys.reduce((a, y) => a + byYear[y][k], 0);
+      const pre = ys.filter((y) => y < 2023).reduce((a, y) => a + byYear[y][k], 0);
+      return `<li><b>${label[k]}</b>: ${ys[0]}${ys.length > 1 ? `–${ys[ys.length - 1]}` : ""}, ${Math.round((pre * 100) / all)}% before 2023</li>`;
+    }).join("");
+    const legend = kinds.filter((k) => years.some((y) => byYear[y][k]) || undated[k]).map((k) => `<span><i style="background:${KIND_COLOR[k]}"></i>${label[k]}</span>`).join("");
+    return `<div class="card tv-card"><div class="tv-sub">When it was written</div>
+      <p class="muted small">Dates come from message timestamps, email headers, commit times and document metadata. Code files and documents without a date in their metadata have none, and don't count towards the "before 2023" share.</p>
+      ${summary ? `<ul class="ww-sum">${summary}</ul>` : ""}
+      <div class="ww">${rows}
+        ${total(undated) ? `<div class="ww-row ww-undated"><span class="ww-y">No date</span>${bar(undated, total(undated))}<span class="ww-n">${compact(total(undated))}</span></div><p class="muted small ww-note">The "No date" bar is on its own scale: it shows how the undated text splits by kind.</p>` : ""}
+      </div>
+      <div class="ww-legend">${legend}</div></div>`;
   }
 
   /** The Linked work tab: how many pieces of work, what they lack, and

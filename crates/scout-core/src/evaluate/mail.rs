@@ -36,6 +36,10 @@ pub struct MailSplitter {
     // top-level message
     automated: bool,
     year: Option<i32>,
+    /// Fallbacks when the Date header is missing: the first Received
+    /// header's date, then the mbox "From " separator line.
+    received_year: Option<i32>,
+    from_line_year: Option<i32>,
     message_id: String,
     in_reply_to: String,
     references: String,
@@ -195,6 +199,11 @@ impl MailSplitter {
         let blank = line.iter().all(|b| b.is_ascii_whitespace());
         if self.mbox && self.prev_blank && line.starts_with(b"From ") {
             self.end_email();
+            // "From sender Mon Jan 01 10:00:00 2018": the year is last.
+            self.from_line_year = String::from_utf8_lossy(line)
+                .split_whitespace()
+                .rev()
+                .find_map(|t| t.parse::<i32>().ok().filter(|y| (1980..=2100).contains(y)));
             self.started = true;
             self.in_headers = true;
             self.prev_blank = false;
@@ -290,6 +299,11 @@ impl MailSplitter {
         for h in &headers {
             if let Some(v) = header_value(h, "date") {
                 self.year = year_of(v);
+            } else if let Some(v) = header_value(h, "received") {
+                // "Received: from x by y; Tue, 5 Jan 2021 10:00:00 +0000"
+                if self.received_year.is_none() {
+                    self.received_year = v.rsplit(';').next().and_then(year_of);
+                }
             } else if let Some(v) = header_value(h, "message-id") {
                 self.message_id = first_id(v);
             } else if let Some(v) = header_value(h, "in-reply-to") {
@@ -394,7 +408,7 @@ impl MailSplitter {
         self.done.push(Email {
             text: strip_quotes(&text),
             automated: self.automated,
-            year: self.year,
+            year: self.year.or(self.received_year).or(self.from_line_year),
             thread,
             subject: std::mem::take(&mut self.subject),
         });
@@ -411,6 +425,17 @@ impl MailSplitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn year_falls_back_to_received_then_the_from_line() {
+        let mbox = "From a@x Mon Jan 01 10:00:00 2018\nFrom: A <a@x>\nSubject: no date\n\nHello\n\nFrom b@x Tue Feb 02 10:00:00 2019\nReceived: from mx by mail; Wed, 6 Mar 2017 10:00:00 +0000\nSubject: also no date\n\nHi\n\n";
+        let mut s = MailSplitter::new(true);
+        s.feed(mbox.as_bytes());
+        s.finish();
+        assert_eq!(s.done.len(), 2);
+        assert_eq!(s.done[0].year, Some(2018));
+        assert_eq!(s.done[1].year, Some(2017));
+    }
 
     #[test]
     fn splits_mime_and_drops_attachments_and_quotes() {

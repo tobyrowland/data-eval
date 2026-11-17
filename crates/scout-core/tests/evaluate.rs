@@ -126,6 +126,32 @@ fn evaluation_separates_usable_text_from_bots_duplicates_and_noise() {
         ev.rows.iter().map(|r| r.usable_tokens).sum::<u64>()
     );
     assert!(t.conversation_tokens > 0 && t.machine_tokens > 0 && t.duplicate_tokens > 0);
+    // Dates: code, the undated documents and the table have none, and the
+    // pre-2023 share is taken over dated text only (not diluted by them).
+    let undated: u64 = ev
+        .rows
+        .iter()
+        .filter(|r| ["docs", "code", "data"].contains(&r.collection.as_str()))
+        .map(|r| r.tokens)
+        .sum();
+    assert_eq!(t.undated_tokens, undated, "{:?}", ev.rows);
+    let dated = t.tokens - t.undated_tokens;
+    assert!(
+        t.pre_llm_tokens * 2 > dated,
+        "mostly 2021: {} of {dated}",
+        t.pre_llm_tokens
+    );
+    let by_year: u64 = ev
+        .distributions
+        .tokens_by_year_kind
+        .values()
+        .flat_map(|m| m.values())
+        .sum();
+    assert_eq!(by_year, dated);
+    assert_eq!(
+        ev.distributions.undated_by_kind.values().sum::<u64>(),
+        t.undated_tokens
+    );
     assert!(!ev.incomplete);
     // Measurements only: no text in the result.
     let out = serde_json::to_string(&ev).unwrap();

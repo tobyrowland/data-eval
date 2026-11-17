@@ -762,6 +762,17 @@ impl Evaluator {
         }
         let mut dist = Distributions::default();
         for d in &self.docs {
+            match d.year {
+                Some(y) => {
+                    *dist
+                        .tokens_by_year_kind
+                        .entry(y)
+                        .or_default()
+                        .entry(d.kind)
+                        .or_default() += d.tokens
+                }
+                None => *dist.undated_by_kind.entry(d.kind).or_default() += d.tokens,
+            }
             let usable = !d.duplicate && d.quality >= 0.5 && d.human && d.kind != Kind::Machine;
             if usable {
                 if let Some(y) = d.year {
@@ -807,8 +818,10 @@ impl Evaluator {
             if d.human {
                 r.human_tokens += d.tokens;
             }
-            if d.year.is_some_and(|y| y < 2023) {
-                r.pre_llm_tokens += d.tokens;
+            match d.year {
+                Some(y) if y < 2023 => r.pre_llm_tokens += d.tokens,
+                Some(_) => {}
+                None => r.undated_tokens += d.tokens,
             }
             if let Some(y) = d.year {
                 r.first_year = Some(r.first_year.map_or(y, |f: i32| f.min(y)));
@@ -875,6 +888,7 @@ impl Evaluator {
                 .sum(),
             human_tokens: sum(|r| r.human_tokens),
             pre_llm_tokens: sum(|r| r.pre_llm_tokens),
+            undated_tokens: sum(|r| r.undated_tokens),
             duplicate_tokens: sum(|r| r.duplicate_tokens),
             low_quality_tokens: sum(|r| r.low_quality_tokens),
             machine_tokens: rows
@@ -947,7 +961,8 @@ fn reason(r: &EvalRow) -> String {
         Kind::Machine => parts.push("written by bots and automated systems".to_string()),
         _ => {}
     }
-    if r.tokens > 0 && r.pre_llm_tokens * 2 > r.tokens {
+    let dated = r.tokens - r.undated_tokens;
+    if dated > 0 && r.pre_llm_tokens * 2 > dated {
         parts.push("mostly written before 2023".to_string());
     }
     if r.tokens > 0 && r.duplicate_tokens * 5 > r.tokens {
@@ -1010,6 +1025,10 @@ pub struct Evaluation {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Distributions {
     pub usable_tokens_by_year: BTreeMap<i32, u64>,
+    /// All tokens by year and kind of document (dated text only).
+    pub tokens_by_year_kind: BTreeMap<i32, BTreeMap<Kind, u64>>,
+    /// Tokens with no date, by kind of document.
+    pub undated_by_kind: BTreeMap<Kind, u64>,
     /// Tokens by quality score band: 0.0–0.1, 0.1–0.2, … 0.9–1.0 (prose only).
     pub tokens_by_quality_band: [u64; 10],
     /// Documents by length in tokens: <50, 50–199, 200–999, 1k–5k, 5k–20k, 20k+.
@@ -1030,7 +1049,10 @@ pub struct EvalRow {
     /// Written by people, good quality, not duplicated.
     pub usable_tokens: u64,
     pub human_tokens: u64,
+    /// Tokens dated before 2023 (only text with a date counts).
     pub pre_llm_tokens: u64,
+    /// Tokens with no date (code, documents without metadata dates).
+    pub undated_tokens: u64,
     pub duplicate_tokens: u64,
     pub low_quality_tokens: u64,
     pub turns: u64,
@@ -1051,7 +1073,10 @@ pub struct EvalTotals {
     pub usable_tokens: u64,
     pub conversation_tokens: u64,
     pub human_tokens: u64,
+    /// Tokens dated before 2023 (only text with a date counts).
     pub pre_llm_tokens: u64,
+    /// Tokens with no date (code, documents without metadata dates).
+    pub undated_tokens: u64,
     pub duplicate_tokens: u64,
     pub low_quality_tokens: u64,
     pub machine_tokens: u64,
@@ -1310,10 +1335,10 @@ impl Sink {
                 if let Ok(mut e) = self.ev.lock() {
                     e.documents_read += 1;
                     if doc.sheet {
-                        e.submit(col, Kind::Structured, &doc.text, true, None, 0);
+                        e.submit(col, Kind::Structured, &doc.text, true, doc.year, 0);
                     } else {
                         e.text_links(col, &self.path, &doc.text);
-                        e.submit(col, Kind::Document, &doc.text, true, None, 0);
+                        e.submit(col, Kind::Document, &doc.text, true, doc.year, 0);
                     }
                 }
             }

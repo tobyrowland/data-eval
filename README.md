@@ -200,7 +200,16 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
    - **Your files:** the map, Your platforms, All items and Files by format
      (formats and coverage), for housekeeping.
    - **Details:** the training value tables, other ways to raise the value,
-     activity over time and languages.
+     **When it was written** (tokens per year by kind, a 2023 marker, and
+     the undated text by kind), activity over time and languages.
+
+   **Dates.** Text is dated from message timestamps (Slack, Teams,
+   Discord), email Date headers (falling back to the first Received header
+   and the mbox "From " line), commit times, and document metadata (Office
+   core properties, OpenDocument meta, PDF CreationDate). File modified
+   times are not used: copying a file changes them. Code files and
+   documents without metadata have no date. "Written before 2023" is the
+   share of *dated* text; undated tokens are reported separately.
 
    **Training value.** The evaluation is a second
    pass that reads every readable document in full, on this computer, and

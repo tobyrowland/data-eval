@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::fmt::Write as _;
 
-pub const SCORING_VERSION: &str = "wm-scores-2026.11.3";
+pub const SCORING_VERSION: &str = "wm-scores-2026.11.4";
 
 /// A 0–100 score with what it rests on.
 #[derive(Debug, Clone, Serialize)]
@@ -144,9 +144,14 @@ pub fn scores(map: &DataMap, ev: &Evaluation) -> Vec<Score> {
         Score {
             id: "pre_llm",
             name: "Pre-LLM share",
-            score: (t.pre_llm_tokens as f64 * 100.0 / tokens).clamp(0.0, 100.0) as u32,
+            score: (t.pre_llm_tokens as f64 * 100.0 / (t.tokens - t.undated_tokens).max(1) as f64)
+                .clamp(0.0, 100.0) as u32,
             weight: 0.15,
-            basis: format!("{}% dated before 2023", pct(t.pre_llm_tokens, t.tokens)),
+            basis: format!(
+                "{}% of dated text is from before 2023; {}% of all text has no date (code, undated documents)",
+                pct(t.pre_llm_tokens, t.tokens - t.undated_tokens),
+                pct(t.undated_tokens, t.tokens)
+            ),
         },
         Score {
             id: "quality",
@@ -325,8 +330,12 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
             format!("{}%", pct(t.human_tokens, t.tokens)),
         ),
         (
-            "Written before 2023",
-            format!("{}%", pct(t.pre_llm_tokens, t.tokens)),
+            "Written before 2023 (share of dated text)",
+            format!(
+                "{}% ({} tokens have no date)",
+                pct(t.pre_llm_tokens, t.tokens - t.undated_tokens),
+                compact(t.undated_tokens)
+            ),
         ),
         ("Duplicated (not counted)", compact(t.duplicate_tokens)),
         ("Low quality", compact(t.low_quality_tokens)),
@@ -407,6 +416,25 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
     for (y, n) in &d.usable_tokens_by_year {
         let _ = writeln!(md, "| {y} | {n} |");
     }
+    md.push_str("\nAll tokens by year and kind (dates come from message timestamps, email headers, commit times and document metadata; code files and documents without metadata have no date):\n\n| Year | Conversation | Email | Document | Code | Structured | Automated |\n|---|---|---|---|---|---|---|\n");
+    let cell = |m: &std::collections::BTreeMap<Kind, u64>, k: Kind| m.get(&k).copied().unwrap_or(0);
+    let kinds = [
+        Kind::Conversation,
+        Kind::Email,
+        Kind::Document,
+        Kind::Code,
+        Kind::Structured,
+        Kind::Machine,
+    ];
+    for (y, m) in &d.tokens_by_year_kind {
+        let v: Vec<String> = kinds.iter().map(|k| cell(m, *k).to_string()).collect();
+        let _ = writeln!(md, "| {y} | {} |", v.join(" | "));
+    }
+    let v: Vec<String> = kinds
+        .iter()
+        .map(|k| cell(&d.undated_by_kind, *k).to_string())
+        .collect();
+    let _ = writeln!(md, "| No date | {} |", v.join(" | "));
     md.push_str("\nTokens by quality score (prose):\n\n| Quality | Tokens |\n|---|---|\n");
     for (i, n) in d.tokens_by_quality_band.iter().enumerate() {
         let _ = writeln!(
