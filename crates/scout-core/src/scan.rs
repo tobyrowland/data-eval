@@ -52,6 +52,9 @@ pub struct TextTotals {
     pub takeout_products: std::collections::BTreeSet<String>,
     /// Git remotes of repositories in this collection, as host/owner/repo.
     pub git_remotes: std::collections::BTreeSet<String>,
+    /// Ticket tracker exports in this collection: tickets, and of those
+    /// marked as Working Minds test data.
+    pub trackers: BTreeMap<&'static str, (u64, u64)>,
     /// Emails with a Message-ID in this collection's mailboxes.
     pub emails_with_id: u64,
     /// Of those, emails already seen earlier (in this or another
@@ -1189,6 +1192,14 @@ impl Scanner<'_> {
         let t = &mut self.text[ctx.collection as usize];
         t.text_bytes += outcome.text_bytes;
         t.words += outcome.words;
+        if let Some((tracker, test)) = outcome.tracker {
+            let n = outcome.records.unwrap_or(0);
+            let e = t.trackers.entry(tracker).or_default();
+            e.0 += n;
+            if test {
+                e.1 += n;
+            }
+        }
         let it = &mut self.items[id as usize];
         it.status = outcome.status;
         it.reason = outcome.reason;

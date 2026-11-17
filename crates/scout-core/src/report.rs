@@ -109,6 +109,10 @@ pub struct CollectionSummary {
     pub display_label: String,
     pub kind: &'static str,
     pub logical_files: u64,
+    /// Ticket tracker exports in this item: (tracker, tickets, of which
+    /// Working Minds test data).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub trackers: Vec<(&'static str, u64, u64)>,
     pub by_status: BTreeMap<Status, u64>,
     pub structured_records: u64,
     pub expanded_bytes: u64,
@@ -890,6 +894,11 @@ pub fn build_data_map(inv: &Inventory) -> DataMap {
             label: c.label.clone(),
             kind: c.source_kind.label(),
             logical_files: col_files[i],
+            trackers: inv.text[i]
+                .trackers
+                .iter()
+                .map(|(k, (n, test))| (*k, *n, *test))
+                .collect(),
             by_status: col_status[i].clone(),
             structured_records: col_records[i],
             expanded_bytes: col_bytes[i],
@@ -1216,6 +1225,9 @@ fn platforms_of(
         if let Some(id) = crate::analyze::sources::classify(host, &format!("/{path}")) {
             add(id);
         }
+    }
+    for tracker in t.trackers.keys() {
+        add(tracker);
     }
     if let Some(snap) = snapshots.get(&c.id) {
         add(snap.service);
@@ -1957,6 +1969,10 @@ fn source_entries(inv: &Inventory) -> Vec<SourceEntry> {
         if t.takeout_products.contains("Mail") {
             present.entry("email").or_default().insert(c.label.clone());
             detected.insert("email", "Google Takeout (Mail)");
+        }
+        for tracker in t.trackers.keys() {
+            present.entry(tracker).or_default().insert(c.label.clone());
+            detected.insert(tracker, "a ticket export (CSV)");
         }
         for r in &t.git_remotes {
             let (host, path) = r.split_once('/').unwrap_or((r.as_str(), ""));

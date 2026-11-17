@@ -49,6 +49,8 @@
     if (c.teams) return { badge: "T", color: "#5059C9", kind: "Microsoft Teams export" };
     if ((c.platforms || []).includes("teams")) return { badge: "↓", color: "#5059C9", kind: "Teams linked files" };
     if (c.discord) return { badge: "D", color: "#5865F2", kind: c.discord.own_messages_only ? "Discord data package" : "Discord channel export" };
+    const tr = (c.trackers || [])[0];
+    if (tr) return { badge: tr[0][0].toUpperCase(), color: "#2684FF", kind: `${PLATFORM_NAMES[tr[0]] || tr[0]} ticket export${tr[2] ? " (TEST DATA, fake)" : ""}` };
     // A repository folder can also hold Slack files: it stays a repository,
     // with the matched files noted.
     const alsoMatched = attachTargets.get(c.label);
@@ -66,7 +68,7 @@
 
   // ---------------------------------------------------------------- map
   // One bubble per platform around the company, sized by unique content.
-  const PLATFORM_COLOR = { slack: "#6D5BD0", teams: "#5059C9", discord: "#5865F2", email: "#C4577A", google_drive: "#2F6FB0", google_other: "#4F86C6", github: "#5E6E84", gitlab: "#7A5E84", bitbucket: "#3D6E9E", other: "#8A97A8" };
+  const PLATFORM_COLOR = { jira: "#2684FF", linear: "#5E6AD2", zendesk: "#03363D", slack: "#6D5BD0", teams: "#5059C9", discord: "#5865F2", email: "#C4577A", google_drive: "#2F6FB0", google_other: "#4F86C6", github: "#5E6E84", gitlab: "#7A5E84", bitbucket: "#3D6E9E", other: "#8A97A8" };
 
   /** Collected platforms with their items, plus items tied to none. */
   function platformGroups(map) {
@@ -92,6 +94,11 @@
       const shared = sum((c) => (c.overlaps || []).filter((o) => labels.has(o.with)).reduce((x, o) => x + o.shared_messages, 0));
       const v = sum((c) => c.structured_records) - Math.round(shared / 2);
       if (v > 0) return { value: v, unit: "emails" };
+    }
+    if (["jira", "linear", "zendesk"].includes(p)) {
+      const v = sum((c) => (c.trackers || []).filter((t) => t[0] === p).reduce((x, t) => x + t[1], 0));
+      const test = sum((c) => (c.trackers || []).filter((t) => t[0] === p).reduce((x, t) => x + t[2], 0));
+      if (v) return { value: v, unit: test ? "tickets (test data)" : "tickets" };
     }
     return { value: sum((c) => c.logical_files), unit: "files" };
   }
@@ -528,8 +535,8 @@
   // One card per platform with the items (files) collected for it, their
   // stats and overlaps, then the platforms the data points to that aren't
   // collected yet.
-  const PLATFORM_NAMES = { slack: "Slack", teams: "Microsoft Teams", discord: "Discord", email: "Email", google_drive: "Google Drive", google_other: "Google (other products)", github: "GitHub", gitlab: "GitLab", bitbucket: "Bitbucket" };
-  const PLATFORM_ORDER = ["slack", "teams", "discord", "email", "google_drive", "google_other", "github", "gitlab", "bitbucket"];
+  const PLATFORM_NAMES = { slack: "Slack", teams: "Microsoft Teams", discord: "Discord", email: "Email", google_drive: "Google Drive", google_other: "Google (other products)", github: "GitHub", gitlab: "GitLab", bitbucket: "Bitbucket", jira: "Jira", linear: "Linear", zendesk: "Zendesk" };
+  const PLATFORM_ORDER = ["slack", "teams", "discord", "email", "google_drive", "google_other", "github", "gitlab", "bitbucket", "jira", "linear", "zendesk"];
   // Which tab is showing, kept across redraws.
   let activeTab = "work";
   // Item rows whose file tree is open, kept across redraws.
