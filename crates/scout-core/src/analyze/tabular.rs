@@ -17,6 +17,9 @@ pub fn delimited(r: &mut dyn Read, delim: u8) -> io::Result<Outcome> {
     let mut ragged_rows: u64 = 0;
     // The header row's bytes, to recognise a ticket tracker's export.
     let mut header: Vec<u8> = Vec::new();
+    // A tracker export's rows, kept to read each ticket's Created date.
+    let mut tracker_live = false;
+    let mut body: Vec<u8> = Vec::new();
     loop {
         let buf = reader.fill_buf()?;
         if buf.is_empty() {
@@ -26,6 +29,8 @@ pub fn delimited(r: &mut dyn Read, delim: u8) -> io::Result<Outcome> {
         for &b in buf {
             if header_fields.is_none() && header.len() < 64 * 1024 {
                 header.push(b);
+            } else if tracker_live && body.len() < 64 * 1024 * 1024 {
+                body.push(b);
             }
             if b == b'"' {
                 in_quotes = !in_quotes;
@@ -37,7 +42,13 @@ pub fn delimited(r: &mut dyn Read, delim: u8) -> io::Result<Outcome> {
                 if row_has_content {
                     rows += 1;
                     match header_fields {
-                        None => header_fields = Some(fields_in_row),
+                        None => {
+                            header_fields = Some(fields_in_row);
+                            tracker_live = delim == b','
+                                && parse_csv(&String::from_utf8_lossy(&header))
+                                    .first()
+                                    .is_some_and(|h| tracker_of_header(h).is_some());
+                        }
                         Some(h) if h != fields_in_row => ragged_rows += 1,
                         _ => {}
                     }
@@ -69,6 +80,9 @@ pub fn delimited(r: &mut dyn Read, delim: u8) -> io::Result<Outcome> {
                     .any(|c| c.trim().eq_ignore_ascii_case("working minds test data"));
                 (t, test)
             });
+            if o.tracker.is_some() {
+                o.months = ticket_months(h, &parse_csv(&String::from_utf8_lossy(&body)));
+            }
         }
     }
     if in_quotes || (data_rows > 0 && ragged_rows * 10 > data_rows) {
@@ -127,6 +141,28 @@ pub fn json(r: &mut dyn Read, max_bytes: usize) -> io::Result<Outcome> {
             Reason::CorruptStructure,
         )),
     }
+}
+
+/// Tickets per month, from a tracker export's Created column.
+fn ticket_months(
+    header: &[String],
+    rows: &[Vec<String>],
+) -> std::collections::BTreeMap<String, u64> {
+    let mut out = std::collections::BTreeMap::new();
+    let col = header.iter().position(|c| {
+        matches!(
+            c.trim().to_ascii_lowercase().as_str(),
+            "created" | "created at" | "created date" | "created_at"
+        )
+    });
+    if let Some(c) = col {
+        for r in rows {
+            if let Some((y, m)) = r.get(c).and_then(|v| super::month_of_date(v)) {
+                *out.entry(super::month_key(y, m)).or_default() += 1;
+            }
+        }
+    }
+    out
 }
 
 /// The ticket tracker whose CSV export has this header row, if any: Jira

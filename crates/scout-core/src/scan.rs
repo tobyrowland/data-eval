@@ -55,6 +55,11 @@ pub struct TextTotals {
     /// Ticket tracker exports in this collection: tickets, and of those
     /// marked as Working Minds test data.
     pub trackers: BTreeMap<&'static str, (u64, u64)>,
+    /// Records per calendar month ("YYYY-MM") from dates inside the
+    /// content: emails, tickets, documents and commits (chat exports keep
+    /// their own monthly counts).
+    /// By source: "email", "documents", "commits" or a tracker's id.
+    pub months: BTreeMap<&'static str, BTreeMap<String, u64>>,
     /// Emails with a Message-ID in this collection's mailboxes.
     pub emails_with_id: u64,
     /// Of those, emails already seen earlier (in this or another
@@ -548,6 +553,21 @@ impl Scanner<'_> {
     fn visit_dir(&mut self, dir: &Path, logical: &str, collection: u32) {
         // During an evaluation pass, a repository's history is read too.
         if logical == ".git" || logical.ends_with("/.git") {
+            if self.opts.evaluator.is_none() {
+                // Commits per month, for coverage over time.
+                let repo = crate::evaluate::git::read_repo(dir);
+                let t = self.text[collection as usize]
+                    .months
+                    .entry("commits")
+                    .or_default();
+                for c in &repo.commits {
+                    if let Some(time) = c.time {
+                        let (y, m, _) =
+                            crate::analyze::slack::civil_from_days(time.div_euclid(86_400));
+                        *t.entry(crate::analyze::month_key(y as i32, m)).or_default() += 1;
+                    }
+                }
+            }
             if let Some(ev) = &self.opts.evaluator {
                 let repo = crate::evaluate::git::read_repo(dir);
                 let name = Path::new(logical.trim_end_matches("/.git"))
@@ -1192,6 +1212,18 @@ impl Scanner<'_> {
         let t = &mut self.text[ctx.collection as usize];
         t.text_bytes += outcome.text_bytes;
         t.words += outcome.words;
+        let source = match (format, outcome.tracker) {
+            (_, Some((tracker, _))) => Some(tracker),
+            (Format::Mbox | Format::Eml, _) => Some("email"),
+            (Format::Pdf | Format::OfficeDocument | Format::OpenDocument, _) => Some("documents"),
+            _ => None,
+        };
+        if let Some(source) = source {
+            let e = t.months.entry(source).or_default();
+            for (m, n) in std::mem::take(&mut outcome.months) {
+                *e.entry(m).or_default() += n;
+            }
+        }
         if let Some((tracker, test)) = outcome.tracker {
             let n = outcome.records.unwrap_or(0);
             let e = t.trackers.entry(tracker).or_default();
@@ -1264,5 +1296,8 @@ fn document(format: Format, r: &mut dyn Read, evaluating: bool) -> io::Result<Ou
         end -= 1;
     }
     o.sample = Some((doc.text[..end].to_string(), truncated));
+    if let Some((y, m)) = doc.month {
+        o.months.insert(crate::analyze::month_key(y, m), 1);
+    }
     Ok(o)
 }

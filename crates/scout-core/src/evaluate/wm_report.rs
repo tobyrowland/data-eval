@@ -589,6 +589,32 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
             overlap
         );
     }
+    let tl = &map.timeline;
+    if !tl.rows.is_empty() {
+        let _ = writeln!(
+            md,
+            "\n## Coverage over time\n\nRecords per month from dates inside the data (message timestamps, email Date headers, commit times, ticket Created dates, document metadata). Company active span (dense sources): {} to {}.\n\n| Platform | First month | Last month | Months with data | Records |\n|---|---|---|---|---|",
+            tl.company_first.as_deref().unwrap_or("—"),
+            tl.company_last.as_deref().unwrap_or("—")
+        );
+        for r in &tl.rows {
+            let _ = writeln!(
+                md,
+                "| {} | {} | {} | {} | {} |",
+                r.name,
+                r.first.as_deref().unwrap_or("—"),
+                r.last.as_deref().unwrap_or("—"),
+                r.months.values().filter(|v| **v > 0).count(),
+                r.total
+            );
+        }
+        if !tl.gaps.is_empty() {
+            md.push_str("\nCoverage gaps:\n\n");
+            for g in &tl.gaps {
+                let _ = writeln!(md, "- {}", g.text);
+            }
+        }
+    }
     md.push_str("\n## Gaps and owner decisions\n\n");
     if let Some(sf) = &map.slack_files {
         let _ = writeln!(
@@ -675,6 +701,11 @@ pub fn wm_report(map: &DataMap, ev: &Evaluation, company: Option<&str>, plan: &V
         "slack_files": map.slack_files.as_ref().map(|s| json!({"referenced": s.images + s.documents, "found": s.images_found + s.documents_found})),
         "teams_files": map.teams_files.as_ref().map(|t| json!({"referenced": t.referenced, "found": t.found})),
         "not_collected": missing,
+        "coverage_over_time": map.timeline.rows.iter().map(|r| json!({
+            "platform": r.platform, "first": r.first, "last": r.last, "records": r.total,
+            "months_with_data": r.months.values().filter(|v| **v > 0).count(),
+        })).collect::<Vec<_>>(),
+        "coverage_gaps": map.timeline.gaps,
     });
     md.push_str("\n## Machine-readable data\n\n```json\n");
     md.push_str(&serde_json::to_string_pretty(&appendix).unwrap_or_default());

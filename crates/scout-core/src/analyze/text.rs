@@ -20,6 +20,8 @@ pub struct TextStats {
     /// Leading text, up to the language sample limit.
     pub sample: String,
     pub sample_truncated: bool,
+    /// Emails per month, from their Date headers (or the mbox From line).
+    pub months: std::collections::BTreeMap<String, u64>,
 }
 
 /// Hash of a Message-ID value, ignoring case and surrounding space and <>.
@@ -53,6 +55,14 @@ pub fn stats_with(r: &mut dyn Read, mbox: bool, eml: bool) -> io::Result<TextSta
     // Inside an email's header block, and a Message-ID folded onto the next line.
     let mut in_headers = eml;
     let mut id_pending = false;
+    // The current email's month from its From line, and whether a Date
+    // header has dated it.
+    let mut from_month: Option<(i32, u32)> = None;
+    let mut dated = false;
+    let mut seen_email = eml;
+    let add_month = |months: &mut std::collections::BTreeMap<String, u64>, m: (i32, u32)| {
+        *months.entry(super::month_key(m.0, m.1)).or_default() += 1;
+    };
     loop {
         line.clear();
         let n = reader.read_until(b'\n', &mut line)?;
@@ -71,9 +81,25 @@ pub fn stats_with(r: &mut dyn Read, mbox: bool, eml: bool) -> io::Result<TextSta
         }
         let blank = line.iter().all(|b| b.is_ascii_whitespace());
         if prev_blank && line.starts_with(b"From ") {
+            if mbox {
+                if seen_email && !dated {
+                    if let Some(m) = from_month {
+                        add_month(&mut s.months, m);
+                    }
+                }
+                from_month = super::month_of_date(&String::from_utf8_lossy(&line));
+                dated = false;
+                seen_email = true;
+            }
             s.mbox_messages += 1;
             in_headers = mbox;
             id_pending = false;
+        } else if in_headers && !dated && line.len() > 5 && line[..5].eq_ignore_ascii_case(b"date:")
+        {
+            if let Some(m) = super::month_of_date(&String::from_utf8_lossy(&line[5..])) {
+                add_month(&mut s.months, m);
+                dated = true;
+            }
         } else if in_headers {
             if blank {
                 in_headers = false;
@@ -109,6 +135,11 @@ pub fn stats_with(r: &mut dyn Read, mbox: bool, eml: bool) -> io::Result<TextSta
             .filter(|w| !w.is_empty())
             .count() as u64;
     }
+    if seen_email && !dated {
+        if let Some(m) = from_month {
+            add_month(&mut s.months, m);
+        }
+    }
     Ok(s)
 }
 
@@ -127,6 +158,7 @@ pub fn analyze(r: &mut dyn Read, mbox: bool, eml: bool) -> io::Result<Outcome> {
     o.sample = Some((std::mem::take(&mut s.sample), s.sample_truncated));
     o.message_ids = std::mem::take(&mut s.message_ids);
     o.addresses = std::mem::take(&mut s.addresses);
+    o.months = std::mem::take(&mut s.months);
     Ok(o)
 }
 

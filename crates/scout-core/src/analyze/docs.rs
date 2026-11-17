@@ -26,6 +26,8 @@ pub struct DocText {
     /// The year the document was created, from its own metadata (Office
     /// core properties, OpenDocument meta, PDF CreationDate), if any.
     pub year: Option<i32>,
+    /// The year and month it was created, when the metadata has them.
+    pub month: Option<(i32, u32)>,
 }
 
 /// Reads a document's text. None when it has none we can read.
@@ -34,7 +36,8 @@ pub fn extract(format: Format, bytes: &[u8]) -> Option<DocText> {
         Format::Pdf => pdf(bytes).map(|text| DocText {
             text,
             sheet: false,
-            year: pdf_year(bytes),
+            year: pdf_month(bytes).map(|m| m.0),
+            month: pdf_month(bytes),
         }),
         Format::OfficeDocument | Format::OpenDocument if bytes.starts_with(b"PK") => package(bytes),
         _ => None,
@@ -76,13 +79,25 @@ fn year_at(s: &str) -> Option<i32> {
 }
 
 /// `/CreationDate (D:YYYYMMDD…)` in a PDF's document information.
-fn pdf_year(bytes: &[u8]) -> Option<i32> {
+fn pdf_month(bytes: &[u8]) -> Option<(i32, u32)> {
     let key = b"/CreationDate";
     let i = bytes.windows(key.len()).position(|w| w == key)?;
     let rest = &bytes[i + key.len()..bytes.len().min(i + key.len() + 40)];
     let s = String::from_utf8_lossy(rest);
     let d = s.find("D:")?;
-    year_at(&s[d + 2..])
+    let digits = &s[d + 2..];
+    let y = year_at(digits)?;
+    let m = digits
+        .get(4..6)
+        .and_then(|m| m.parse::<u32>().ok())
+        .filter(|m| (1..=12).contains(m))
+        .unwrap_or(1);
+    Some((y, m))
+}
+
+#[cfg(test)]
+fn pdf_year(bytes: &[u8]) -> Option<i32> {
+    pdf_month(bytes).map(|m| m.0)
 }
 
 /// The text inside the first `<tag …>…</tag>` of an XML part.
@@ -93,20 +108,20 @@ fn xml_value<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
     Some(xml[start..end].trim())
 }
 
-/// The creation year in Office core properties or OpenDocument meta.
-fn package_year(core: Option<String>, meta: Option<String>) -> Option<i32> {
+/// The creation month in Office core properties or OpenDocument meta.
+fn package_month(core: Option<String>, meta: Option<String>) -> Option<(i32, u32)> {
     if let Some(c) = core {
-        if let Some(y) = xml_value(&c, "dcterms:created")
+        if let Some(m) = xml_value(&c, "dcterms:created")
             .or_else(|| xml_value(&c, "dcterms:modified"))
-            .and_then(year_at)
+            .and_then(super::month_of_date)
         {
-            return Some(y);
+            return Some(m);
         }
     }
     meta.and_then(|m| {
         xml_value(&m, "meta:creation-date")
             .or_else(|| xml_value(&m, "dc:date"))
-            .and_then(year_at)
+            .and_then(super::month_of_date)
     })
 }
 
@@ -121,7 +136,8 @@ fn package(bytes: &[u8]) -> Option<DocText> {
     };
     let core = read("docProps/core.xml");
     let meta = read("meta.xml");
-    d.year = package_year(core, meta);
+    d.month = package_month(core, meta);
+    d.year = d.month.map(|m| m.0);
     Some(d)
 }
 
@@ -151,6 +167,7 @@ fn package_text(bytes: &[u8]) -> Option<DocText> {
             text,
             sheet: false,
             year: None,
+            month: None,
         });
     }
     // PowerPoint: slides, then speaker notes, in slide order.
@@ -168,6 +185,7 @@ fn package_text(bytes: &[u8]) -> Option<DocText> {
             text,
             sheet: false,
             year: None,
+            month: None,
         });
     }
     // Excel: the shared strings hold the text cells.
@@ -179,6 +197,7 @@ fn package_text(bytes: &[u8]) -> Option<DocText> {
             text,
             sheet: true,
             year: None,
+            month: None,
         });
     }
     // OpenDocument (odt, odp, ods)
@@ -194,6 +213,7 @@ fn package_text(bytes: &[u8]) -> Option<DocText> {
             text,
             sheet,
             year: None,
+            month: None,
         });
     }
     None
@@ -354,6 +374,10 @@ mod tests {
         assert_eq!(
             extract(Format::OfficeDocument, &docx).unwrap().year,
             Some(2018)
+        );
+        assert_eq!(
+            extract(Format::OfficeDocument, &docx).unwrap().month,
+            Some((2018, 4))
         );
         let odt = zip(&[
             ("content.xml", "<office:body><text:p>Hello there</text:p></office:body>"),
