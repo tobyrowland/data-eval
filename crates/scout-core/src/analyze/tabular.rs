@@ -15,6 +15,8 @@ pub fn delimited(r: &mut dyn Read, delim: u8) -> io::Result<Outcome> {
     let mut fields_in_row: u64 = 1;
     let mut header_fields: Option<u64> = None;
     let mut ragged_rows: u64 = 0;
+    // The header row's bytes, to recognise a ticket tracker's export.
+    let mut header: Vec<u8> = Vec::new();
     loop {
         let buf = reader.fill_buf()?;
         if buf.is_empty() {
@@ -22,6 +24,9 @@ pub fn delimited(r: &mut dyn Read, delim: u8) -> io::Result<Outcome> {
         }
         let len = buf.len();
         for &b in buf {
+            if header_fields.is_none() && header.len() < 64 * 1024 {
+                header.push(b);
+            }
             if b == b'"' {
                 in_quotes = !in_quotes;
                 row_has_content = true;
@@ -55,6 +60,17 @@ pub fn delimited(r: &mut dyn Read, delim: u8) -> io::Result<Outcome> {
     }
     let data_rows = rows.saturating_sub(1);
     let mut o = Outcome::assessed(Some(data_rows));
+    if delim == b',' {
+        let head = parse_csv(&String::from_utf8_lossy(&header));
+        if let Some(h) = head.first() {
+            o.tracker = tracker_of_header(h).map(|t| {
+                let test = h
+                    .iter()
+                    .any(|c| c.trim().eq_ignore_ascii_case("working minds test data"));
+                (t, test)
+            });
+        }
+    }
     if in_quotes || (data_rows > 0 && ragged_rows * 10 > data_rows) {
         o.status = Status::PartlyAssessed;
         o.reason = Some(Reason::CorruptStructure);
@@ -110,6 +126,26 @@ pub fn json(r: &mut dyn Read, max_bytes: usize) -> io::Result<Outcome> {
             Status::StoppedSafely,
             Reason::CorruptStructure,
         )),
+    }
+}
+
+/// The ticket tracker whose CSV export has this header row, if any: Jira
+/// ("Issue key"), Zendesk ("Subject" with "Requester" or "Ticket ID") or
+/// Linear ("ID" or "Identifier" with "Title" and "Team" or "Cycle").
+pub fn tracker_of_header(header: &[String]) -> Option<&'static str> {
+    let h: Vec<String> = header
+        .iter()
+        .map(|c| c.trim().trim_start_matches('\u{feff}').to_ascii_lowercase())
+        .collect();
+    let has = |n: &str| h.iter().any(|c| c == n);
+    if has("issue key") || has("issue_key") {
+        Some("jira")
+    } else if has("subject") && (has("requester") || has("requester email") || has("ticket id")) {
+        Some("zendesk")
+    } else if (has("id") || has("identifier")) && has("title") && (has("team") || has("cycle")) {
+        Some("linear")
+    } else {
+        None
     }
 }
 

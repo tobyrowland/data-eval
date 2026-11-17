@@ -175,6 +175,11 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
      pieces of work each would complete** ("Add Jira · up to +1,210
      complete · +2,950 linked"), and the most common kinds of linked work
      with the part each lacks. *Find linked work* runs the evaluation.
+     **Quality tiers:** each piece of linked work scores 0–100 (complete 40,
+     steps 20, systems 15, how much people wrote 15, before 2023 10) and is
+     gold (70+), silver (45–69) or bronze. The tab shows the tier counts and
+     the average score per kind of linked work; the report lists them and
+     weights the linkage dimension score by tier.
      **Try it with test data** (on the Jira step) writes a fake Jira CSV,
      on this computer, for the ticket keys the owner's own data mentions
      (about three in four resolved shortly after their last mention), so

@@ -49,6 +49,8 @@
     if (c.teams) return { badge: "T", color: "#5059C9", kind: "Microsoft Teams export" };
     if ((c.platforms || []).includes("teams")) return { badge: "↓", color: "#5059C9", kind: "Teams linked files" };
     if (c.discord) return { badge: "D", color: "#5865F2", kind: c.discord.own_messages_only ? "Discord data package" : "Discord channel export" };
+    const tr = (c.trackers || [])[0];
+    if (tr) return { badge: tr[0][0].toUpperCase(), color: "#2684FF", kind: `${PLATFORM_NAMES[tr[0]] || tr[0]} ticket export${tr[2] ? " (TEST DATA, fake)" : ""}` };
     // A repository folder can also hold Slack files: it stays a repository,
     // with the matched files noted.
     const alsoMatched = attachTargets.get(c.label);
@@ -66,7 +68,7 @@
 
   // ---------------------------------------------------------------- map
   // One bubble per platform around the company, sized by unique content.
-  const PLATFORM_COLOR = { slack: "#6D5BD0", teams: "#5059C9", discord: "#5865F2", email: "#C4577A", google_drive: "#2F6FB0", google_other: "#4F86C6", github: "#5E6E84", gitlab: "#7A5E84", bitbucket: "#3D6E9E", other: "#8A97A8" };
+  const PLATFORM_COLOR = { jira: "#2684FF", linear: "#5E6AD2", zendesk: "#03363D", slack: "#6D5BD0", teams: "#5059C9", discord: "#5865F2", email: "#C4577A", google_drive: "#2F6FB0", google_other: "#4F86C6", github: "#5E6E84", gitlab: "#7A5E84", bitbucket: "#3D6E9E", other: "#8A97A8" };
 
   /** Collected platforms with their items, plus items tied to none. */
   function platformGroups(map) {
@@ -92,6 +94,11 @@
       const shared = sum((c) => (c.overlaps || []).filter((o) => labels.has(o.with)).reduce((x, o) => x + o.shared_messages, 0));
       const v = sum((c) => c.structured_records) - Math.round(shared / 2);
       if (v > 0) return { value: v, unit: "emails" };
+    }
+    if (["jira", "linear", "zendesk"].includes(p)) {
+      const v = sum((c) => (c.trackers || []).filter((t) => t[0] === p).reduce((x, t) => x + t[1], 0));
+      const test = sum((c) => (c.trackers || []).filter((t) => t[0] === p).reduce((x, t) => x + t[2], 0));
+      if (v) return { value: v, unit: test ? "tickets (test data)" : "tickets" };
     }
     return { value: sum((c) => c.logical_files), unit: "files" };
   }
@@ -528,8 +535,8 @@
   // One card per platform with the items (files) collected for it, their
   // stats and overlaps, then the platforms the data points to that aren't
   // collected yet.
-  const PLATFORM_NAMES = { slack: "Slack", teams: "Microsoft Teams", discord: "Discord", email: "Email", google_drive: "Google Drive", google_other: "Google (other products)", github: "GitHub", gitlab: "GitLab", bitbucket: "Bitbucket" };
-  const PLATFORM_ORDER = ["slack", "teams", "discord", "email", "google_drive", "google_other", "github", "gitlab", "bitbucket"];
+  const PLATFORM_NAMES = { slack: "Slack", teams: "Microsoft Teams", discord: "Discord", email: "Email", google_drive: "Google Drive", google_other: "Google (other products)", github: "GitHub", gitlab: "GitLab", bitbucket: "Bitbucket", jira: "Jira", linear: "Linear", zendesk: "Zendesk" };
+  const PLATFORM_ORDER = ["slack", "teams", "discord", "email", "google_drive", "google_other", "github", "gitlab", "bitbucket", "jira", "linear", "zendesk"];
   // Which tab is showing, kept across redraws.
   let activeTab = "work";
   // Item rows whose file tree is open, kept across redraws.
@@ -1021,20 +1028,30 @@
           <div class="lw-step-head"><b>Add ${esc(g.name)}</b>${badges}</div>
           <p>${what}${adds ? ` It adds <i>${esc(adds)}</i>.` : ""}</p>
           <small class="muted">${esc(g.advice)}</small>
-          ${["jira", "linear"].includes(g.id) && g.distinct_targets ? `<div class="lw-test"><button class="btn ghost small" data-lw-test>Try it with test data</button><small class="muted">Creates a fake Jira export for the ${num(g.distinct_targets)} tickets your data mentions, so you can see how linked work completes. It isn't real data: remove it before sending a report.</small></div>` : ""}
+          ${["jira", "linear"].includes(g.id) && g.distinct_targets ? `<div class="lw-test"><button class="btn ghost small" data-lw-test>Try it with test data</button><small class="muted">Creates fake Jira tickets for the ${num(g.distinct_targets)} tickets your data mentions, adds them and finds linked work again, so you can see how it completes (takes about as long as Find linked work). It isn't real data: remove it before sending a report.</small></div>` : ""}
         </div></li>`;
     }).join("");
     const shapes = (e.shapes || []).map((s) => `<tr>
         <td>${s.systems.map(esc).join(" + ")}</td>
         <td class="lw-ok">${s.why ? "✓" : "—"}</td><td class="lw-ok">${s.action ? "✓" : "—"}</td><td class="lw-ok">${s.outcome ? "✓" : "<b class=\"lw-miss\">missing</b>"}</td>
-        <td class="num">${num(s.episodes)}</td></tr>`).join("");
+        <td class="num">${num(s.episodes)}</td>
+        <td class="num">${s.mean_score != null ? `<span class="lw-tier ${s.mean_score >= 70 ? "g" : s.mean_score >= 45 ? "s" : "b"}">${s.mean_score}</span>` : "—"}</td></tr>`).join("");
     host.innerHTML = `
       ${ev.incomplete ? `<div class="pc-note warn"><span><b>Stopped before the end.</b> These numbers cover only what was read.</span></div>` : ""}
-      ${e.test_tickets ? `<div class="pc-note warn"><span><b>Includes ${num(e.test_tickets)} fake test tickets.</b> Linked work that depends on them isn't real. Remove the "Working Minds TEST Jira export" item before sending your report or creating a data pack.</span></div>` : ""}
+      ${e.test_tickets ? `<div class="pc-note warn lw-testnote"><span><b>Includes ${num(e.test_tickets)} fake test tickets.</b> Linked work that depends on them isn't real. To remove them, open <b>Your files</b> and remove the "Working Minds TEST Jira export" item${handlers.testFile ? ` (saved in Documents › Working Minds)` : ""}. Remove it before sending your report or creating a data pack.</span>${handlers.testFile ? `<button class="btn ghost small" data-lw-showtest>Show file</button>` : ""}</div>` : ""}
       <div class="card tv-card lw-head">
         <div class="lw-headline">
           <h3><b>${num(n)}</b> pieces of linked work · <b>${num(e.complete)}</b> complete</h3>
           <p>${why}</p>
+          ${n && e.gold ? `<div class="lw-tiers">
+            <span class="lw-tier g" title="Score 70 or more"><b>${num(e.gold.pieces)}</b> gold</span>
+            <span class="lw-tier s" title="Score 45–69"><b>${num(e.silver.pieces)}</b> silver</span>
+            <span class="lw-tier b" title="Score below 45"><b>${num(e.bronze.pieces)}</b> bronze</span>
+            <span class="muted small">average score ${num(Math.round(e.score_sum / n))} of 100</span>
+          </div>
+          <details class="lw-how"><summary>How pieces are scored</summary>
+            <p>Each piece of linked work scores up to 100: <b>40</b> for being complete (why, what was done and how it turned out), <b>20</b> for its number of steps, <b>15</b> for the systems it spans, <b>15</b> for how much people wrote, and <b>10</b> if it's from before 2023. Gold is 70 or more, silver 45–69, bronze below 45. Buyers value gold pieces most.</p>
+          </details>` : ""}
         </div>
         <div class="lw-parts">
           ${part("Why", e.with_why, "a request, ticket or discussion")}
@@ -1046,9 +1063,11 @@
         <ol class="lw-steps">${steps}</ol>
         <p class="muted small">"Up to" assumes the export contains the items your data mentions and, for tickets, that they were resolved. The numbers update when you add the files.</p></div>` : ""}
       ${shapes ? `<div class="card tv-card"><div class="tv-sub">What your linked work looks like</div>
-        <div class="tbl-wrap"><table class="tbl lw-tbl"><thead><tr><th>Systems joined</th><th>Why</th><th>What was done</th><th>How it turned out</th><th class="num">Pieces</th></tr></thead><tbody>${shapes}</tbody></table></div>
+        <div class="tbl-wrap"><table class="tbl lw-tbl"><thead><tr><th>Systems joined</th><th>Why</th><th>What was done</th><th>How it turned out</th><th class="num">Pieces</th><th class="num">Avg score</th></tr></thead><tbody>${shapes}</tbody></table></div>
         <p class="muted small">Records are joined only when they cite the same ticket, pull request, commit, document or email thread. ${e.commits ? `Read: ${num(e.commits)} commits` : ""}${e.tickets ? ` · ${num(e.tickets)} tickets` : ""}${e.ci_logs ? ` · ${num(e.ci_logs)} build logs` : ""}</p></div>` : ""}`;
     confirmClick(host.querySelector("[data-lw-test]"), "Create fake test tickets?", () => handlers.onMakeTestJira && handlers.onMakeTestJira());
+    const showTest = host.querySelector("[data-lw-showtest]");
+    if (showTest) showTest.onclick = () => handlers.onShowTestFile && handlers.onShowTestFile();
   }
 
   /** Two-step button: the first click asks, the second acts. */

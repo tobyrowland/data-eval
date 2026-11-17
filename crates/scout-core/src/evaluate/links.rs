@@ -589,7 +589,7 @@ impl Links {
         let ci_gap = commits > 0 && ci_logs == 0;
         // Per gap: (records, keys, pieces it would complete, pieces it would add).
         let mut gap_stats: BTreeMap<&'static str, GapTally> = BTreeMap::new();
-        let mut shapes: BTreeMap<(Vec<&'static str>, u8), u64> = BTreeMap::new();
+        let mut shapes: BTreeMap<(Vec<&'static str>, u8), (u64, u64)> = BTreeMap::new();
         let complete_with = |roles: u8| {
             let has = |r: Role| roles & r as u8 != 0;
             has(Role::Action) && has(Role::Outcome) && (has(Role::Intent) || has(Role::Discussion))
@@ -689,13 +689,34 @@ impl Links {
                 _ => 3,
             };
             out.by_size[size] += 1;
+            // Quality of this piece of work, 0-100, and its tier.
+            let score = trajectory_score(
+                roles,
+                complete,
+                members.len(),
+                systems.len(),
+                tokens,
+                first_year.is_some_and(|y| y < 2023),
+            );
+            out.score_sum += score as u64;
+            let tier = if score >= GOLD {
+                &mut out.gold
+            } else if score >= SILVER {
+                &mut out.silver
+            } else {
+                &mut out.bronze
+            };
+            tier.pieces += 1;
+            tier.tokens += tokens;
             systems.sort();
             for (a, x) in systems.iter().enumerate() {
                 for y in &systems[a + 1..] {
                     *pairs.entry((x, y)).or_default() += 1;
                 }
             }
-            *shapes.entry((systems.clone(), roles)).or_default() += 1;
+            let sh = shapes.entry((systems.clone(), roles)).or_default();
+            sh.0 += 1;
+            sh.1 += score as u64;
         }
         let mut pairs: Vec<SystemPair> = pairs
             .into_iter()
@@ -712,12 +733,13 @@ impl Links {
         out.system_pairs = pairs;
         let mut shapes: Vec<Shape> = shapes
             .into_iter()
-            .map(|((systems, roles), n)| Shape {
+            .map(|((systems, roles), (n, score_sum))| Shape {
                 systems: systems.iter().map(|s| system_name(s)).collect(),
                 why: roles & (Role::Intent as u8 | Role::Discussion as u8) != 0,
                 action: roles & Role::Action as u8 != 0,
                 outcome: roles & Role::Outcome as u8 != 0,
                 episodes: n,
+                mean_score: (score_sum / n.max(1)) as u32,
             })
             .collect();
         shapes.sort_by(|a, b| b.episodes.cmp(&a.episodes).then(a.systems.cmp(&b.systems)));
@@ -1022,6 +1044,13 @@ pub struct Episodes {
     pub tokens: u64,
     /// Episodes by records: 2, 3–5, 6–20, 21+.
     pub by_size: [u64; 4],
+    /// Pieces of work by quality tier (see [`trajectory_score`]): gold 70+,
+    /// silver 45-69, bronze below 45.
+    pub gold: Tier,
+    pub silver: Tier,
+    pub bronze: Tier,
+    /// Sum of the pieces' scores (mean = score_sum / episodes).
+    pub score_sum: u64,
     /// Groups too large to be one piece of work (not counted as episodes).
     pub clusters: u64,
     pub system_pairs: Vec<SystemPair>,
@@ -1049,6 +1078,48 @@ pub struct SystemPair {
     pub episodes: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct Tier {
+    pub pieces: u64,
+    pub tokens: u64,
+}
+
+/// Score a piece of linked work 0-100 for training value:
+/// - completeness, up to 40: why, what was done and how it turned out
+///   (complete 40; why + what 25; other two-part 15; linked talk only 5)
+/// - steps, up to 20: records in the piece, 12 or more scoring full marks
+/// - systems, up to 15: each system beyond the first adds 5, up to 3 more
+/// - human reasoning, up to 15: tokens in the piece, log scale, 10,000+
+/// - written before 2023: 10
+pub fn trajectory_score(
+    roles: u8,
+    complete: bool,
+    records: usize,
+    systems: usize,
+    tokens: u64,
+    pre_llm: bool,
+) -> u32 {
+    let has = |r: Role| roles & r as u8 != 0;
+    let why = has(Role::Intent) || has(Role::Discussion);
+    let completeness = if complete {
+        40.0
+    } else if why && has(Role::Action) {
+        25.0
+    } else if roles.count_ones() >= 2 {
+        15.0
+    } else {
+        5.0
+    };
+    let steps = (records.min(12) as f64 / 12.0) * 20.0;
+    let systems = (systems.saturating_sub(1).min(3) as f64) * 5.0;
+    let reasoning = ((tokens as f64 + 1.0).log10() / 4.0).min(1.0) * 15.0;
+    let age = if pre_llm { 10.0 } else { 0.0 };
+    (completeness + steps + systems + reasoning + age).round() as u32
+}
+
+pub const GOLD: u32 = 70;
+pub const SILVER: u32 = 45;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Shape {
     pub systems: Vec<String>,
@@ -1056,6 +1127,8 @@ pub struct Shape {
     pub action: bool,
     pub outcome: bool,
     pub episodes: u64,
+    /// Mean quality score (0-100) of these pieces of work.
+    pub mean_score: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1104,6 +1177,21 @@ mod tests {
         assert_eq!(f.refs.len(), 2);
         assert_eq!(f.refs[0].1, "bitbucket");
         assert_eq!(f.refs[1].1, "google_drive");
+    }
+
+    #[test]
+    fn trajectory_scores_reward_complete_long_cross_system_older_work() {
+        let all =
+            Role::Intent as u8 | Role::Discussion as u8 | Role::Action as u8 | Role::Outcome as u8;
+        // A 12-step bug fix across 4 systems with plenty of discussion, 2021.
+        assert_eq!(trajectory_score(all, true, 12, 4, 10_000, true), 100);
+        // Two Slack threads about the same ticket, recent, short.
+        let talk = Role::Discussion as u8;
+        let s = trajectory_score(talk, false, 2, 1, 60, false);
+        assert!(s < SILVER, "{s}");
+        // Why + what, no result, a few systems: silver at most.
+        let s = trajectory_score(talk | Role::Action as u8, false, 4, 3, 300, true);
+        assert!((SILVER..GOLD).contains(&s), "{s}");
     }
 
     #[test]

@@ -30,6 +30,9 @@ pub struct Outcome {
     pub message_ids: Vec<u64>,
     /// Addresses in mailbox From/To/Cc headers. Local only.
     pub addresses: Vec<String>,
+    /// A ticket tracker's CSV export (Jira, Linear, Zendesk), recognised
+    /// by its header row, and whether its rows are Working Minds test data.
+    pub tracker: Option<(&'static str, bool)>,
 }
 
 impl Outcome {
@@ -44,6 +47,7 @@ impl Outcome {
             sample: None,
             message_ids: Vec::new(),
             addresses: Vec::new(),
+            tracker: None,
         }
     }
     pub fn inventoried() -> Self {
@@ -57,6 +61,7 @@ impl Outcome {
             sample: None,
             message_ids: Vec::new(),
             addresses: Vec::new(),
+            tracker: None,
         }
     }
     pub fn with(status: Status, reason: Reason) -> Self {
@@ -70,6 +75,7 @@ impl Outcome {
             sample: None,
             message_ids: Vec::new(),
             addresses: Vec::new(),
+            tracker: None,
         }
     }
 }

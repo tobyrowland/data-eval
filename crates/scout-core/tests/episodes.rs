@@ -108,6 +108,13 @@ fn one_piece_of_work_across_five_systems_is_one_complete_episode() {
     assert_eq!((e.ci_logs, e.ci_passed), (1, 1));
     assert_eq!(e.episodes, 1, "{e:#?}");
     assert_eq!(e.complete, 1);
+    // Complete, six records across five systems, from 2021: gold.
+    assert_eq!(
+        (e.gold.pieces, e.silver.pieces, e.bronze.pieces),
+        (1, 0, 0),
+        "{e:#?}"
+    );
+    assert!(e.shapes[0].mean_score >= 70);
     assert_eq!(e.multi_system, 1);
     assert_eq!(e.pre_llm, 1);
     // Slack thread, email thread, two commits, the ticket and the CI log.
@@ -166,6 +173,9 @@ fn without_results_nothing_is_complete_and_the_gaps_say_what_would_complete_it()
     assert_eq!(e.episodes, 1, "{e:#?}");
     assert_eq!(e.complete, 0);
     assert_eq!((e.with_why, e.with_action, e.with_outcome), (1, 1, 0));
+    // Without a result it can't be gold.
+    assert_eq!(e.gold.pieces, 0, "{e:#?}");
+    assert_eq!(e.silver.pieces + e.bronze.pieces, 1);
     let gap = |id: &str| {
         e.gaps
             .iter()
@@ -224,4 +234,56 @@ fn test_jira_data_from_the_owners_own_mentions_completes_linked_work_and_is_flag
     assert!(md.contains("TEST DATA"), "report must flag test data");
     // Normal evaluations keep no ticket text.
     assert!(!serde_json::to_string(&ev).unwrap().contains("BUG-812"));
+}
+
+#[test]
+fn an_evaluation_also_returns_the_ticket_mentions_without_putting_them_in_its_output() {
+    let inv = fixture("episodes-mentions", false, false);
+    let inputs: Vec<_> = inv.collections.iter().map(|c| c.source.clone()).collect();
+    let labels: Vec<_> = inv.collections.iter().map(|c| c.label.clone()).collect();
+    let (ev, mentions) = scout_core::evaluate::evaluate_inputs_with_mentions(
+        inputs.clone(),
+        labels,
+        vec![],
+        None,
+        &mut |_| {},
+    );
+    let keys: Vec<&str> = mentions.iter().map(|m| m.key.as_str()).collect();
+    assert_eq!(keys, vec!["BUG-812", "BUG-901", "BUG-902"]);
+    let alone = scout_core::evaluate::ticket_mentions(inputs, vec![], None, &mut |_| {});
+    assert_eq!(alone.len(), mentions.len());
+    assert!(!serde_json::to_string(&ev).unwrap().contains("BUG-"));
+}
+
+#[test]
+fn a_jira_export_is_shown_as_jira_on_the_map_and_test_data_is_marked() {
+    let d = tempdir("jira-map");
+    let slack = slack(
+        &["We hit BUG-1, BUG-2 and BUG-3 again: see https://acme.atlassian.net/browse/BUG-1"],
+        &[],
+    );
+    write(&d, "slack.zip", &slack);
+    let csv = "Summary,Issue key,Issue Type,Status,Created,Resolved,Description,Working Minds test data\nA,BUG-1,Bug,Done,2021-03-01 10:00,2021-03-02 10:00,x,yes\nB,BUG-2,Bug,To Do,2021-03-01 10:00,,x,yes\n";
+    write(&d, "tickets.csv", csv.as_bytes());
+    let inv = scan(
+        &[d.join("slack.zip"), d.join("tickets.csv")],
+        ScanOptions::default(),
+    );
+    let map = scout_core::build_data_map(&inv);
+    let item = map
+        .collections
+        .iter()
+        .find(|c| c.label == "tickets.csv")
+        .unwrap();
+    assert_eq!(item.platforms, vec!["jira"]);
+    assert_eq!(item.trackers, vec![("jira", 2, 2)]);
+    let jira = map
+        .sources
+        .iter()
+        .find(|s| s.id == "jira")
+        .expect("jira source");
+    assert!(
+        jira.in_selection,
+        "Jira should no longer be 'not collected'"
+    );
 }
