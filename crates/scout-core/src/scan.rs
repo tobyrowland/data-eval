@@ -564,8 +564,7 @@ impl Scanner<'_> {
                     if let Some(time) = c.time {
                         let (y, m, _) =
                             crate::analyze::slack::civil_from_days(time.div_euclid(86_400));
-                        *t.entry(crate::analyze::month_key(y as i32, m))
-                            .or_default() += 1;
+                        *t.entry(crate::analyze::month_key(y as i32, m)).or_default() += 1;
                     }
                 }
             }
