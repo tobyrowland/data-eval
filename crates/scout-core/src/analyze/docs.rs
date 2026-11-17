@@ -23,12 +23,19 @@ pub struct DocText {
     pub text: String,
     /// Spreadsheet cells rather than prose.
     pub sheet: bool,
+    /// The year the document was created, from its own metadata (Office
+    /// core properties, OpenDocument meta, PDF CreationDate), if any.
+    pub year: Option<i32>,
 }
 
 /// Reads a document's text. None when it has none we can read.
 pub fn extract(format: Format, bytes: &[u8]) -> Option<DocText> {
     let out = match format {
-        Format::Pdf => pdf(bytes).map(|text| DocText { text, sheet: false }),
+        Format::Pdf => pdf(bytes).map(|text| DocText {
+            text,
+            sheet: false,
+            year: pdf_year(bytes),
+        }),
         Format::OfficeDocument | Format::OpenDocument if bytes.starts_with(b"PK") => package(bytes),
         _ => None,
     }?;
@@ -61,7 +68,64 @@ fn pdf(bytes: &[u8]) -> Option<String> {
     Some(out)
 }
 
+/// A plausible year (1980-2100) at the start of a string.
+fn year_at(s: &str) -> Option<i32> {
+    s.get(..4)
+        .and_then(|y| y.parse::<i32>().ok())
+        .filter(|y| (1980..=2100).contains(y))
+}
+
+/// `/CreationDate (D:YYYYMMDD…)` in a PDF's document information.
+fn pdf_year(bytes: &[u8]) -> Option<i32> {
+    let key = b"/CreationDate";
+    let i = bytes.windows(key.len()).position(|w| w == key)?;
+    let rest = &bytes[i + key.len()..bytes.len().min(i + key.len() + 40)];
+    let s = String::from_utf8_lossy(rest);
+    let d = s.find("D:")?;
+    year_at(&s[d + 2..])
+}
+
+/// The text inside the first `<tag …>…</tag>` of an XML part.
+fn xml_value<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
+    let open = xml.find(&format!("<{tag}"))?;
+    let start = open + xml[open..].find('>')? + 1;
+    let end = start + xml[start..].find('<')?;
+    Some(xml[start..end].trim())
+}
+
+/// The creation year in Office core properties or OpenDocument meta.
+fn package_year(core: Option<String>, meta: Option<String>) -> Option<i32> {
+    if let Some(c) = core {
+        if let Some(y) = xml_value(&c, "dcterms:created")
+            .or_else(|| xml_value(&c, "dcterms:modified"))
+            .and_then(year_at)
+        {
+            return Some(y);
+        }
+    }
+    meta.and_then(|m| {
+        xml_value(&m, "meta:creation-date")
+            .or_else(|| xml_value(&m, "dc:date"))
+            .and_then(year_at)
+    })
+}
+
 fn package(bytes: &[u8]) -> Option<DocText> {
+    let mut d = package_text(bytes)?;
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).ok()?;
+    let mut read = |name: &str| -> Option<String> {
+        let f = zip.by_name(name).ok()?;
+        let mut s = String::new();
+        f.take(1024 * 1024).read_to_string(&mut s).ok()?;
+        Some(s)
+    };
+    let core = read("docProps/core.xml");
+    let meta = read("meta.xml");
+    d.year = package_year(core, meta);
+    Some(d)
+}
+
+fn package_text(bytes: &[u8]) -> Option<DocText> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).ok()?;
     let names: Vec<String> = zip.file_names().map(String::from).collect();
     let has = |n: &str| names.iter().any(|x| x == n);
@@ -83,7 +147,11 @@ fn package(bytes: &[u8]) -> Option<DocText> {
                 text.push_str(&xml_text(&x, &["w:t"], &["w:p"], &["w:tab"]));
             }
         }
-        return Some(DocText { text, sheet: false });
+        return Some(DocText {
+            text,
+            sheet: false,
+            year: None,
+        });
     }
     // PowerPoint: slides, then speaker notes, in slide order.
     let mut slides = numbered(&names, "ppt/slides/slide");
@@ -96,14 +164,22 @@ fn package(bytes: &[u8]) -> Option<DocText> {
                 text.push('\n');
             }
         }
-        return Some(DocText { text, sheet: false });
+        return Some(DocText {
+            text,
+            sheet: false,
+            year: None,
+        });
     }
     // Excel: the shared strings hold the text cells.
     if has("xl/sharedStrings.xml") || names.iter().any(|n| n.starts_with("xl/worksheets/")) {
         let text = read("xl/sharedStrings.xml")
             .map(|x| xml_text(&x, &["t"], &["si"], &[]))
             .unwrap_or_default();
-        return Some(DocText { text, sheet: true });
+        return Some(DocText {
+            text,
+            sheet: true,
+            year: None,
+        });
     }
     // OpenDocument (odt, odp, ods)
     if has("content.xml") {
@@ -114,7 +190,11 @@ fn package(bytes: &[u8]) -> Option<DocText> {
             &["text:p", "text:h"],
             &["text:tab", "text:s", "text:line-break"],
         );
-        return Some(DocText { text, sheet });
+        return Some(DocText {
+            text,
+            sheet,
+            year: None,
+        });
     }
     None
 }
@@ -263,6 +343,31 @@ mod tests {
         let t = extract(Format::OfficeDocument, &xlsx).unwrap();
         assert_eq!(t.text, "Region\nNortheast\n");
         assert!(t.sheet);
+    }
+
+    #[test]
+    fn dates_from_metadata() {
+        let docx = zip(&[
+            ("word/document.xml", "<w:document><w:body><w:p><w:r><w:t>Old plan</w:t></w:r></w:p></w:body></w:document>"),
+            ("docProps/core.xml", r#"<cp:coreProperties><dcterms:created xsi:type="dcterms:W3CDTF">2018-04-02T09:00:00Z</dcterms:created></cp:coreProperties>"#),
+        ]);
+        assert_eq!(
+            extract(Format::OfficeDocument, &docx).unwrap().year,
+            Some(2018)
+        );
+        let odt = zip(&[
+            ("content.xml", "<office:body><text:p>Hello there</text:p></office:body>"),
+            ("meta.xml", "<office:meta><meta:creation-date>2016-11-30T10:00:00</meta:creation-date></office:meta>"),
+        ]);
+        assert_eq!(
+            extract(Format::OpenDocument, &odt).unwrap().year,
+            Some(2016)
+        );
+        assert_eq!(
+            pdf_year(b"%PDF-1.4 1 0 obj << /Producer (x) /CreationDate (D:20190314120000Z) >>"),
+            Some(2019)
+        );
+        assert_eq!(pdf_year(b"%PDF-1.4 no info"), None);
     }
 
     #[test]
