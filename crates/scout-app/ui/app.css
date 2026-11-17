@@ -721,3 +721,11 @@ body.dragging .drag-veil-card { transform: scale(1); }
 .lw-how { margin-top: 8px; font-size: 13px; color: var(--ink-2); }
 .lw-how summary { cursor: pointer; color: var(--teal); }
 .lw-how p { margin: 6px 0 0; }
+
+.lw-types { display: grid; gap: 8px; margin: 12px 0 8px; }
+.lw-type { display: grid; grid-template-columns: 190px 1fr 110px 190px; gap: 12px; align-items: center; font-size: 14px; }
+.lw-type-bar { height: 8px; background: var(--surface-2); border-radius: 5px; overflow: hidden; }
+.lw-type-bar span { display: block; height: 100%; background: var(--teal); border-radius: 5px; }
+.lw-type-n { text-align: right; }
+.lw-type-meta { display: flex; gap: 8px; align-items: center; }
+@media (max-width: 760px) { .lw-type { grid-template-columns: 1fr 1fr; } .lw-type-bar { grid-column: 1 / -1; } }

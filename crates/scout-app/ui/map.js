@@ -1034,6 +1034,7 @@
     const shapes = (e.shapes || []).map((s) => `<tr>
         <td>${s.systems.map(esc).join(" + ")}</td>
         <td class="lw-ok">${s.why ? "✓" : "—"}</td><td class="lw-ok">${s.action ? "✓" : "—"}</td><td class="lw-ok">${s.outcome ? "✓" : "<b class=\"lw-miss\">missing</b>"}</td>
+        <td>${esc(s.top_type || "—")}</td>
         <td class="num">${num(s.episodes)}</td>
         <td class="num">${s.mean_score != null ? `<span class="lw-tier ${s.mean_score >= 70 ? "g" : s.mean_score >= 45 ? "s" : "b"}">${s.mean_score}</span>` : "—"}</td></tr>`).join("");
     host.innerHTML = `
@@ -1062,8 +1063,19 @@
       ${steps ? `<div class="card tv-card"><div class="tv-sub">Next steps · ranked by what they complete</div>
         <ol class="lw-steps">${steps}</ol>
         <p class="muted small">"Up to" assumes the export contains the items your data mentions and, for tickets, that they were resolved. The numbers update when you add the files.</p></div>` : ""}
+      ${(e.by_type || []).length ? (() => {
+        const max = Math.max(...e.by_type.map((t) => t.pieces), 1);
+        return `<div class="card tv-card"><div class="tv-sub">What kind of work</div>
+          <div class="lw-types">${e.by_type.map((t) => `<div class="lw-type">
+            <span class="lw-type-name">${esc(t.name)}</span>
+            <span class="lw-type-bar"><span style="width:${(t.pieces * 100) / max}%"></span></span>
+            <span class="lw-type-n"><b>${num(t.pieces)}</b> pieces</span>
+            <span class="lw-type-meta">${t.gold ? `<span class="lw-tier g">${num(t.gold)} gold</span>` : ""}<span class="muted small">${t.pieces ? Math.round((t.complete * 100) / t.pieces) : 0}% complete</span></span>
+          </div>`).join("")}</div>
+          <p class="muted small">Types come from words in the messages, emails, documents and commits, commit prefixes like "fix:" and ticket types like Bug or Story (English only). Buyers often look for one kind, such as bug fixes or customer support.</p></div>`;
+      })() : ""}
       ${shapes ? `<div class="card tv-card"><div class="tv-sub">What your linked work looks like</div>
-        <div class="tbl-wrap"><table class="tbl lw-tbl"><thead><tr><th>Systems joined</th><th>Why</th><th>What was done</th><th>How it turned out</th><th class="num">Pieces</th><th class="num">Avg score</th></tr></thead><tbody>${shapes}</tbody></table></div>
+        <div class="tbl-wrap"><table class="tbl lw-tbl"><thead><tr><th>Systems joined</th><th>Why</th><th>What was done</th><th>How it turned out</th><th>Mostly</th><th class="num">Pieces</th><th class="num">Avg score</th></tr></thead><tbody>${shapes}</tbody></table></div>
         <p class="muted small">Records are joined only when they cite the same ticket, pull request, commit, document or email thread. ${e.commits ? `Read: ${num(e.commits)} commits` : ""}${e.tickets ? ` · ${num(e.tickets)} tickets` : ""}${e.ci_logs ? ` · ${num(e.ci_logs)} build logs` : ""}</p></div>` : ""}`;
     confirmClick(host.querySelector("[data-lw-test]"), "Create fake test tickets?", () => handlers.onMakeTestJira && handlers.onMakeTestJira());
     const showTest = host.querySelector("[data-lw-showtest]");

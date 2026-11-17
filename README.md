@@ -180,6 +180,15 @@ The preview is not code-signed yet, so Windows shows a first-run warning.
      gold (70+), silver (45–69) or bronze. The tab shows the tier counts and
      the average score per kind of linked work; the report lists them and
      weights the linkage dimension score by tier.
+     **Types of work:** each piece is classed as Bug fix, Feature work,
+     Incident, Customer support, Sales and deals, Planning and decisions,
+     Maintenance, or Mixed or unclear. The evidence is words in its records
+     (English word lists, capped per record), commit prefixes (fix:, feat:,
+     chore: …), ticket types (Bug, Story, Incident …), Zendesk tickets,
+     failed builds and links to Sentry/PagerDuty/Datadog. The strongest
+     type wins with at least 3 points and 40% of the evidence. The tab
+     shows a "What kind of work" card (pieces, gold, % complete per type)
+     and a "Mostly" column per kind of linked work; the report has a table.
      **Try it with test data** (on the Jira step) writes a fake Jira CSV,
      on this computer, for the ticket keys the owner's own data mentions
      (about three in four resolved shortly after their last mention), so

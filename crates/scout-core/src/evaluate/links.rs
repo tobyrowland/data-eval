@@ -65,6 +65,8 @@ struct Rec {
     refs: Vec<u64>,
     tickets: Vec<(u64, u64)>,
     owns: Vec<u64>,
+    /// Evidence for each type of work (see [`WORK_TYPES`]).
+    cues: [u16; 7],
 }
 
 /// Collects records during the evaluation pass.
@@ -259,6 +261,15 @@ impl Links {
     }
 
     /// A reference to a known key (a shared file, a commit).
+    /// Adds evidence of the type of work to a record (which must exist).
+    pub fn add_cues(&mut self, unit: u64, cues: [u16; 7]) {
+        if let Some(r) = self.units.get_mut(&unit) {
+            for (a, b) in r.cues.iter_mut().zip(cues) {
+                *a = a.saturating_add(b);
+            }
+        }
+    }
+
     pub fn add_ref(&mut self, unit: u64, key: u64, system: &'static str) {
         self.key_system.entry(key).or_insert(system);
         if let Some(r) = self.units.get_mut(&unit) {
@@ -589,7 +600,9 @@ impl Links {
         let ci_gap = commits > 0 && ci_logs == 0;
         // Per gap: (records, keys, pieces it would complete, pieces it would add).
         let mut gap_stats: BTreeMap<&'static str, GapTally> = BTreeMap::new();
-        let mut shapes: BTreeMap<(Vec<&'static str>, u8), (u64, u64)> = BTreeMap::new();
+        let mut shapes: BTreeMap<(Vec<&'static str>, u8), ShapeTally> = BTreeMap::new();
+        // Per type of work: pieces, complete, [gold, silver, bronze], tokens.
+        let mut by_type = [(0u64, 0u64, [0u64; 3], 0u64); 8];
         let complete_with = |roles: u8| {
             let has = |r: Role| roles & r as u8 != 0;
             has(Role::Action) && has(Role::Outcome) && (has(Role::Intent) || has(Role::Discussion))
@@ -607,9 +620,24 @@ impl Links {
             let mut first_year: Option<i32> = None;
             let mut has_commit = false;
             let mut touched: BTreeMap<&'static str, ()> = BTreeMap::new();
+            let mut cues = [0u32; 7];
             for &i in members {
                 let r = &recs[i];
                 roles |= r.roles;
+                for (a, b) in cues.iter_mut().zip(r.cues) {
+                    *a += b as u32;
+                }
+                if r.system == "zendesk" {
+                    cues[3] += 5;
+                }
+                if r.refs.iter().any(|k| {
+                    matches!(
+                        key_system.get(k).copied(),
+                        Some("sentry" | "pagerduty" | "datadog")
+                    )
+                }) {
+                    cues[2] += 3;
+                }
                 if !systems.contains(&r.system) {
                     systems.push(r.system);
                 }
@@ -708,6 +736,12 @@ impl Links {
             };
             tier.pieces += 1;
             tier.tokens += tokens;
+            let kind = classify_work(&cues);
+            let bt = &mut by_type[kind];
+            bt.0 += 1;
+            bt.1 += u64::from(complete);
+            bt.2[usize::from(score < GOLD) + usize::from(score < SILVER)] += 1;
+            bt.3 += tokens;
             systems.sort();
             for (a, x) in systems.iter().enumerate() {
                 for y in &systems[a + 1..] {
@@ -717,7 +751,23 @@ impl Links {
             let sh = shapes.entry((systems.clone(), roles)).or_default();
             sh.0 += 1;
             sh.1 += score as u64;
+            sh.2[kind] += 1;
         }
+        out.by_type = by_type
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.0 > 0)
+            .map(|(i, t)| TypeCount {
+                id: WORK_TYPES[i].0,
+                name: WORK_TYPES[i].1,
+                pieces: t.0,
+                complete: t.1,
+                gold: t.2[0],
+                silver: t.2[1],
+                bronze: t.2[2],
+                tokens: t.3,
+            })
+            .collect();
         let mut pairs: Vec<SystemPair> = pairs
             .into_iter()
             .map(|((a, b), n)| SystemPair {
@@ -733,13 +783,19 @@ impl Links {
         out.system_pairs = pairs;
         let mut shapes: Vec<Shape> = shapes
             .into_iter()
-            .map(|((systems, roles), (n, score_sum))| Shape {
+            .map(|((systems, roles), (n, score_sum, kinds))| Shape {
                 systems: systems.iter().map(|s| system_name(s)).collect(),
                 why: roles & (Role::Intent as u8 | Role::Discussion as u8) != 0,
                 action: roles & Role::Action as u8 != 0,
                 outcome: roles & Role::Outcome as u8 != 0,
                 episodes: n,
                 mean_score: (score_sum / n.max(1)) as u32,
+                top_type: {
+                    let i = (0..8)
+                        .max_by_key(|&i| (kinds[i], std::cmp::Reverse(i)))
+                        .unwrap_or(7);
+                    WORK_TYPES[i].1
+                },
             })
             .collect();
         shapes.sort_by(|a, b| b.episodes.cmp(&a.episodes).then(a.systems.cmp(&b.systems)));
@@ -777,6 +833,9 @@ impl Links {
         out
     }
 }
+
+/// Per kind of linked work: pieces, score sum, pieces per type of work.
+type ShapeTally = (u64, u64, [u64; 8]);
 
 /// Per missing system: records citing it, keys cited, pieces of work it
 /// would complete, pieces it would add.
@@ -1056,6 +1115,8 @@ pub struct Episodes {
     pub system_pairs: Vec<SystemPair>,
     /// The most common kinds of episode: systems and parts present.
     pub shapes: Vec<Shape>,
+    /// Pieces of work by type of work (see [`WORK_TYPES`]).
+    pub by_type: Vec<TypeCount>,
     pub systems: Vec<SystemCount>,
     /// Missing systems that would link records, most first.
     pub gaps: Vec<Gap>,
@@ -1129,6 +1190,226 @@ pub struct Shape {
     pub episodes: u64,
     /// Mean quality score (0-100) of these pieces of work.
     pub mean_score: u32,
+    /// The most common type of work among them.
+    pub top_type: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TypeCount {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub pieces: u64,
+    pub complete: u64,
+    pub gold: u64,
+    pub silver: u64,
+    pub bronze: u64,
+    pub tokens: u64,
+}
+
+/// Types of work, in display order; the last is the fallback.
+pub const WORK_TYPES: [(&str, &str); 8] = [
+    ("bug_fix", "Bug fix"),
+    ("feature", "Feature work"),
+    ("incident", "Incident"),
+    ("support", "Customer support"),
+    ("sales", "Sales and deals"),
+    ("planning", "Planning and decisions"),
+    ("maintenance", "Maintenance"),
+    ("mixed", "Mixed or unclear"),
+];
+
+const LEXICON: [&[&str]; 7] = [
+    &[
+        "bug",
+        "bugs",
+        "fix",
+        "fixed",
+        "fixes",
+        "fixing",
+        "crash",
+        "crashes",
+        "crashed",
+        "error",
+        "errors",
+        "exception",
+        "regression",
+        "broken",
+        "failing",
+        "hotfix",
+        "defect",
+        "stacktrace",
+    ],
+    &[
+        "feature",
+        "features",
+        "implement",
+        "implemented",
+        "implementing",
+        "launch",
+        "launched",
+        "release",
+        "released",
+        "spec",
+        "prototype",
+        "mvp",
+        "endpoint",
+        "mockup",
+        "wireframe",
+    ],
+    &[
+        "outage",
+        "incident",
+        "incidents",
+        "down",
+        "alert",
+        "alerts",
+        "paged",
+        "sev1",
+        "sev2",
+        "postmortem",
+        "post-mortem",
+        "rollback",
+        "degraded",
+        "downtime",
+        "on-call",
+    ],
+    &[
+        "customer",
+        "customers",
+        "client",
+        "clients",
+        "refund",
+        "complaint",
+        "complaints",
+        "helpdesk",
+        "escalation",
+        "escalated",
+    ],
+    &[
+        "deal",
+        "deals",
+        "contract",
+        "contracts",
+        "proposal",
+        "pricing",
+        "quote",
+        "invoice",
+        "prospect",
+        "prospects",
+        "renewal",
+        "demo",
+        "procurement",
+    ],
+    &[
+        "roadmap",
+        "plan",
+        "planning",
+        "decision",
+        "decide",
+        "decided",
+        "priority",
+        "priorities",
+        "okr",
+        "okrs",
+        "sprint",
+        "retro",
+        "strategy",
+        "agenda",
+    ],
+    &[
+        "refactor",
+        "refactoring",
+        "cleanup",
+        "upgrade",
+        "upgraded",
+        "bump",
+        "dependency",
+        "dependencies",
+        "migrate",
+        "migration",
+        "chore",
+        "docs",
+        "lint",
+        "tests",
+    ],
+];
+
+/// Evidence of the type of work in a text: whole-word matches against
+/// small English word lists, at most 5 per type so one long text can't
+/// decide alone.
+pub fn work_cues(text: &str) -> [u16; 7] {
+    let mut out = [0u16; 7];
+    for w in text
+        .split(|c: char| !(c.is_alphanumeric() || c == '-'))
+        .filter(|w| (2..=14).contains(&w.len()))
+    {
+        let w = w.trim_matches('-').to_lowercase();
+        for (i, words) in LEXICON.iter().enumerate() {
+            if out[i] < 5 && words.contains(&w.as_str()) {
+                out[i] += 1;
+            }
+        }
+    }
+    out
+}
+
+/// A commit message's evidence: its words, plus the conventional prefix
+/// (fix:, feat:, chore: …) counted strongly.
+pub fn commit_cues(message: &str) -> [u16; 7] {
+    let mut c = work_cues(message);
+    let first = message.lines().next().unwrap_or("").trim().to_lowercase();
+    let prefix: String = first
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphabetic())
+        .collect();
+    let rest = &first[prefix.len()..];
+    let conventional = rest.starts_with(':') || rest.starts_with('(') || rest.starts_with('!');
+    let idx = match prefix.as_str() {
+        "fix" | "bugfix" if conventional => Some(0),
+        "hotfix" | "revert" => Some(0),
+        "feat" | "feature" if conventional => Some(1),
+        "chore" | "refactor" | "build" | "ci" | "docs" | "test" | "tests" | "perf" | "style"
+            if conventional =>
+        {
+            Some(6)
+        }
+        _ => None,
+    };
+    if let Some(i) = idx {
+        c[i] = c[i].saturating_add(3);
+    }
+    c
+}
+
+/// A ticket's evidence from its tracker type (Bug, Story, Incident …).
+pub fn issue_type_cues(issue_type: &str) -> [u16; 7] {
+    let mut c = [0u16; 7];
+    match issue_type.trim().to_lowercase().as_str() {
+        "bug" | "defect" => c[0] = 5,
+        "story" | "feature" | "new feature" | "improvement" | "enhancement" => c[1] = 5,
+        "incident" | "problem" | "outage" => c[2] = 5,
+        "epic" | "initiative" => c[5] = 3,
+        "technical debt" | "tech debt" | "chore" => c[6] = 5,
+        "question" | "service request" => c[3] = 3,
+        _ => {}
+    }
+    c
+}
+
+/// The type of a piece of work: the strongest evidence, if it is at least
+/// 3 and at least 40% of all evidence; otherwise mixed (index 7).
+pub fn classify_work(cues: &[u32; 7]) -> usize {
+    let total: u32 = cues.iter().sum();
+    let (i, &max) = cues
+        .iter()
+        .enumerate()
+        .max_by_key(|(i, v)| (**v, std::cmp::Reverse(*i)))
+        .unwrap_or((7, &0));
+    if max >= 3 && max * 10 >= total * 4 {
+        i
+    } else {
+        7
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1192,6 +1473,23 @@ mod tests {
         // Why + what, no result, a few systems: silver at most.
         let s = trajectory_score(talk | Role::Action as u8, false, 4, 3, 300, true);
         assert!((SILVER..GOLD).contains(&s), "{s}");
+    }
+
+    #[test]
+    fn work_cues_find_types_by_whole_words() {
+        let c = work_cues(
+            "The export crashes with a null error; fixed in the hotfix. Fixture data downloaded.",
+        );
+        assert_eq!(c[0], 4, "{c:?}"); // crashes, error, fixed, hotfix (not fixture)
+        assert_eq!(c[2], 0, "{c:?}"); // not 'down' in downloaded
+        assert_eq!(classify_work(&c.map(u32::from)), 0);
+        let c = commit_cues("feat(api): add the pricing endpoint");
+        assert_eq!(classify_work(&c.map(u32::from)), 1);
+        assert_eq!(commit_cues("chore: bump deps")[6], 5); // chore + bump words, +3 for the prefix
+                                                           // Weak or split evidence is mixed.
+        assert_eq!(classify_work(&[1, 1, 0, 0, 0, 0, 0]), 7);
+        assert_eq!(classify_work(&[3, 3, 3, 0, 0, 0, 0]), 7);
+        assert_eq!(issue_type_cues("Bug")[0], 5);
     }
 
     #[test]

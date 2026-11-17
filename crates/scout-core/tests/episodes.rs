@@ -115,6 +115,13 @@ fn one_piece_of_work_across_five_systems_is_one_complete_episode() {
         "{e:#?}"
     );
     assert!(e.shapes[0].mean_score >= 70);
+    // "export fails…", "BUG-812: handle a missing region", Issue Type Bug.
+    assert_eq!(e.by_type.len(), 1, "{:?}", e.by_type);
+    assert_eq!(
+        (e.by_type[0].id, e.by_type[0].pieces, e.by_type[0].gold),
+        ("bug_fix", 1, 1)
+    );
+    assert_eq!(e.shapes[0].top_type, "Bug fix");
     assert_eq!(e.multi_system, 1);
     assert_eq!(e.pre_llm, 1);
     // Slack thread, email thread, two commits, the ticket and the CI log.
